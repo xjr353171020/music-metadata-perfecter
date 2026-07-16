@@ -1,0 +1,30 @@
+# Local settings and machine-specific editor configuration
+/settings.json
+/.vscode/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Build outputs
+/build/
+/dist/
+*.spec
+
+# Runtime logs
+/runtime_logs/
+*.log
+
+# Local music library and conversion inputs
+*.mp3
+*.flac
+*.ncm
+*.wav
+*.m4a
+*.aac
+*.ogg
+*.opus
+
+# Personal development history
+/历史对话/

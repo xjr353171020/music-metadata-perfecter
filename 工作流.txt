@@ -1,0 +1,32 @@
+***项目流程描述***
+
+总流程：转换 ncm 文件 -> 移动文件到同一目录 -> 依次处理元数据
+    转换 ncm 文件："E:\CloudMusic\VipSongsDownload" 下所有 ncm 文件，需要解密，需要用 "E:\CloudMusic\VipSongsDownload\Ncm拖一拖.exe" 打开，会自动在 "E:\CloudMusic\VipSongsDownload" 下生成对应的 flac/mp3 文件。
+    移动文件到同一目录：将 "E:\CloudMusic\VipSongsDownload" 下所有 flac/mp3 文件移动至 "E:\CloudMusic" ，与 "E:\CloudMusic" 下原有 flac/mp3 文件合并。
+
+    依次处理元数据：读取元数据 -> 格式化字段 -> 补差信息、查找高质量专辑封面 -> 回写元数据
+        读取元数据：flac 文件用 mutagen.flac 读取 Vorbis Comment ，应有这些字段："artist""tracknumber""title""albumartist""album" 。
+            mp3文件用 mutagen.mp3 和 mutagen.id3 读取 id3v2.3 UTF-16 标签，应有："TALB""TPE1""TPE2""TIT2""TRCK""APIC" ，"APIC" 中可能有图片，也可能没有。
+        ***统一字段模型***
+        可能需要建立一个统一字段模型，用以统一更改，再回写元数据至原格式。下面是我所期望每首歌都有的信息。
+        {
+            "title": ["..."],
+            "artist": ["..."],
+            "album": ["..."],
+            "albumartist": ["..."],
+            "tracknumber": ["1"],
+            "discnumber": ["1"],
+            "cover": [
+                {
+                    "mime": "image/jpeg",
+                    "type_id": 3,
+                    "type": "front_cover",
+                    "description": "",
+                    "data": b"..."
+                }
+            ]
+        }，删除其他字段。
+        格式化字段：ARTIST 和 ALBUMARTIST 中，为了表示多个艺术家，网易云音乐默认使用'/'进行连接，但规范是类似 ['seatrus', 'kuro', 'Halv', '打打だいず'] ，需要纠正。
+        补差信息：写一个界面展示元数据，手动输入缺失信息。
+        查找高质量专辑封面：需要一个能粘贴图片的框体，手动搜索高分辨率图片并粘贴进去。建立缓存文件夹，如果遇到相同的专辑（ album 字段相同），就调取缓存图片。文件原有图片不纳入缓存，只有粘贴的才纳入。
+        回写元数据：待细化

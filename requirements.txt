@@ -1,0 +1,3 @@
+# Cross-language album-index transliteration
+pypinyin>=0.55,<1
+pykakasi>=2.3,<3
