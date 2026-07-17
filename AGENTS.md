@@ -171,6 +171,8 @@ Then manually verify only the affected workflow: top-level MP3/FLAC loading, sel
 
 A task is not complete until the Simplified Chinese report states:
 
+- each Codex-authored repository change is committed in its own logical Git commit after verification and pushed to `origin` before reporting completion; never include unrelated user changes in that commit;
+
 - files changed;
 - behavior changed;
 - behavior intentionally preserved;
