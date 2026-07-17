@@ -155,9 +155,9 @@ Examples of targeted, existing test modules:
 "<configured-python-path>" -m unittest test_application_undo_and_cancel -v
 ```
 
-`test_metadata_restore.py` requires `ffmpeg` on `PATH` and skips its real-file class when unavailable. At documentation creation, the configured interpreter ran all 60 discovered tests successfully, including the `ffmpeg` cases. Network tests mock external calls; the suite does not validate live MusicBrainz, Apple, Cover Art Archive, or DeepSeek behavior.
+`test_metadata_restore.py` requires `ffmpeg` on `PATH` and skips its real-file class when unavailable. At the `2026.07.17.1` release build, the configured interpreter ran all 83 discovered tests successfully, including the `ffmpeg` cases. Network tests mock external calls; the suite does not validate live MusicBrainz, Apple, Cover Art Archive, or DeepSeek behavior.
 
-For metadata-byte investigation, `.test_audio_meta_diff.py` is an existing standalone diagnostic script; see `docs/DEBUGGING_GUIDE.md`. It is not part of `unittest` discovery. No verified packaging command or project-level lint/type-check command exists in the repository.
+For metadata-byte investigation, `.test_audio_meta_diff.py` is an existing standalone diagnostic script; see `docs/DEBUGGING_GUIDE.md`. It is not part of `unittest` discovery. `build_release.ps1` is the verified Windows packaging entry point and requires the configured interpreter path. No project-level lint/type-check command exists in the repository.
 
 When a UI/network change cannot be automated, launch with:
 

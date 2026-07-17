@@ -25,9 +25,9 @@ Incomplete separations that must be understood rather than hidden:
 - `MusicEditorWindow` still owns workflow coordination, widget/session mirrors, Provider-result caches, source preference, request identity, save/undo presentation, cover state, and local workflow calls.
 - local conversion/move/delete/cleanup remains synchronous on the UI thread.
 - per-window and process-global caches have different lifetimes and no unified invalidation contract.
-- there is no automatic save rollback, durable undo journal, save dry-run, or reproducible packaging configuration.
+- there is no automatic save rollback, durable undo journal, or save dry-run. Windows packaging is reproducible through `build_release.ps1`, but code signing and automated CI release publishing are not configured.
 
-The current automated suite is standard-library `unittest`. At this handoff's creation, the configured interpreter ran 60 discovered tests successfully, including temporary real MP3/FLAC restore tests using `ffmpeg`. External network behavior is mocked.
+The current automated suite is standard-library `unittest`. At the `2026.07.17.1` release build, the configured interpreter ran 83 discovered tests successfully, including temporary real MP3/FLAC restore tests using `ffmpeg`. External network behavior is mocked.
 
 ## 2. Stable areas
 

@@ -315,7 +315,7 @@ Two different mechanisms share one LIFO `UndoManager`:
 
 `EditorStateSnapshot` contains selected paths, current field text, checkbox/lock state, cursor selections, cover/mixed/modified state, result-panel values, selected source, and status/score text. `SessionPatch` optionally stores previous metadata/locks or source-preference/API-cache entries. Continuous typing in the same field/path can merge within 0.55 seconds. Applying undo suspends recording so restoration does not create a new command.
 
-The stack defaults to 40 commands and 128 MiB. Cover byte payloads are SHA-256 interned to reduce duplicate memory. There is no redo. Virtual-album grouping, skip markers, settings, and local file workflows are not represented as editor undo commands.
+The undo and redo stacks share limits of 40 commands and 128 MiB. Cover byte payloads are SHA-256 interned to reduce duplicate memory. Undo moves a command to redo, redo moves it back to undo, and a new command clears redo. Virtual-album grouping, skip markers, settings, and local file workflows are not represented as editor undo commands.
 
 ### Saved-file restore
 
@@ -389,7 +389,7 @@ Cover changes are editor-undoable, and saved cover state participates in filesys
 
 These helpers currently run synchronously under a wait cursor, so large operations can block the UI. Return success generally means the workflow ran, not that every individual conversion/move succeeded; individual failures are printed and counts can be lower than discovered files.
 
-`config.py` checks `sys.frozen` and uses the executable directory for packaged settings. The repository contains `build/` and `dist/main.exe`, proving a PyInstaller build has existed, but no `.spec` file or reproducible packaging command is present. Packaging behavior beyond the explicit `sys.frozen`/`sys._MEIPASS` paths is therefore uncertain.
+`config.py` checks `sys.frozen` and uses the executable directory for packaged settings. `build_release.ps1` is the reproducible Windows packaging entry point: it requires an explicit Python interpreter, reads `config.APP_VERSION`, builds a one-file/no-console PyInstaller executable with the NCM converter embedded, creates an EXE-only ZIP, and writes SHA-256 checksums. Generated `build/`, `dist/`, and `.spec` files remain ignored.
 
 ## 15. Caches and identity
 
@@ -547,17 +547,17 @@ These helpers currently run synchronously under a wait cursor, so large operatio
 
 **Verification:** Mixed, cover-only, text-only, no-cover restore, invalid image, and dependent-cover cases.
 
-### Risk: hidden configuration and incomplete dependency manifest
+### Risk: hidden local configuration and release inputs
 
-**Where:** `.vscode/settings.json`, `settings.json`, `requirements.txt`, `config.py`, build artifacts
+**Where:** `.vscode/settings.json`, `settings.json`, `requirements*.txt`, `config.py`, `build_release.ps1`, build artifacts
 
-**Why it exists:** Interpreter is workspace-configured; settings are machine-local; requirements list only transliteration packages.
+**Why it exists:** The interpreter and settings are machine-local, while release packaging embeds a converter and generates artifacts beside ignored settings and logs.
 
-**Failure mode:** Wrong Python, missing PyQt6/Mutagen/requests/Pillow, leaked API key, or unreproducible package build.
+**Failure mode:** Wrong Python, dependency drift, leaked API key/local metadata, omitted bundled resources, or accidental publication of settings/logs.
 
-**Safe modification strategy:** Follow `AGENTS.md` interpreter rules, inspect installed environment before changes, and never expose settings secrets.
+**Safe modification strategy:** Follow `AGENTS.md` interpreter rules, keep runtime/build manifests current, use `build_release.ps1`, and publish only its named EXE/ZIP/checksum outputs.
 
-**Verification:** Report exact interpreter; run imports/tests; do not claim packaging reproducibility.
+**Verification:** Report the exact interpreter; run `pip check` and tests; inspect the archive/ZIP; launch the packaged EXE from an isolated directory; never publish settings or logs.
 
 ### Risk: synchronous destructive local workflows
 
