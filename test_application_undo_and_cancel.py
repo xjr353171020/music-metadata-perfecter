@@ -101,6 +101,31 @@ class ApplicationUndoTests(unittest.TestCase):
         self.assertEqual(self.window.inputs["title"].currentText(), "Original 0")
         self.assertFalse(self.window.undo_manager.can_undo)
 
+        QTest.keyClick(line_edit, Qt.Key.Key_Y, Qt.KeyboardModifier.ControlModifier)
+        self.app.processEvents()
+        self.assertEqual(self.window.inputs["title"].currentText(), "Changed")
+        self.assertTrue(self.window.undo_manager.can_undo)
+
+    def test_id_inputs_keep_native_ctrl_z_and_ctrl_y(self):
+        before = self.window.undo_manager.count
+        for line_edit in (
+            self.window.input_mbid,
+            self.window.input_apple_collection_id,
+        ):
+            line_edit.setFocus()
+            QTest.keyClicks(line_edit, "12345")
+            QTest.keyClick(
+                line_edit, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier
+            )
+            self.app.processEvents()
+            self.assertEqual(line_edit.text(), "")
+            QTest.keyClick(
+                line_edit, Qt.Key.Key_Y, Qt.KeyboardModifier.ControlModifier
+            )
+            self.app.processEvents()
+            self.assertEqual(line_edit.text(), "12345")
+        self.assertEqual(self.window.undo_manager.count, before)
+
     def test_two_fields_undo_in_reverse_order(self):
         for key, value in (("title", "Changed title"), ("artist", "Changed artist")):
             line_edit = self.window.inputs[key].lineEdit()
@@ -124,6 +149,9 @@ class ApplicationUndoTests(unittest.TestCase):
         self.assertEqual(self.window.inputs["title"].currentText(), "Original 0")
         self.assertEqual(self.window.inputs["artist"].currentText(), "Artist")
         self.assertEqual(self.window.undo_manager.count, before)
+        self.window.perform_redo()
+        self.assertEqual(self.window.inputs["title"].currentText(), "API title")
+        self.assertEqual(self.window.inputs["artist"].currentText(), "API artist")
 
     def test_single_apply_checkbox_and_lock_are_each_undoable(self):
         self.window.mb_inputs["title"].setText("API title")
@@ -153,6 +181,12 @@ class ApplicationUndoTests(unittest.TestCase):
         self.assertFalse(self.window.album_session.is_locked(self.paths[0], "title"))
         self.assertFalse(lock.isChecked())
         self.assertEqual(lock.text(), "🔓")
+        self.window.perform_redo()
+        self.assertTrue(self.window.album_session.is_locked(self.paths[0], "title"))
+        self.assertTrue(lock.isChecked())
+        self.window.perform_redo()
+        self.assertFalse(self.window.album_session.is_locked(self.paths[0], "title"))
+        self.assertFalse(lock.isChecked())
 
     def test_pasted_cover_undo_restores_no_cover_and_modified_flag(self):
         image = QImage(8, 6, QImage.Format.Format_RGB32)
@@ -203,6 +237,9 @@ class ApplicationUndoTests(unittest.TestCase):
         self.window.perform_undo()
         self.assertEqual(self.window.mb_inputs["title"].text(), "MB title")
         self.assertEqual(self.window._current_metadata_source, "MusicBrainz")
+        self.window.perform_redo()
+        self.assertEqual(self.window.mb_inputs["title"].text(), "Apple title")
+        self.assertEqual(self.window._current_metadata_source, "Apple Music")
 
     def test_save_then_first_ctrl_z_restores_saved_file_and_reselects_it(self):
         InMemoryTagger.values = {
@@ -226,6 +263,64 @@ class ApplicationUndoTests(unittest.TestCase):
         self.assertEqual(InMemoryTagger.values[self.paths[0]]["title"], "Original 0")
         self.assertEqual(self.window._item_path(self.window.file_list.currentItem()), self.paths[0])
         self.assertEqual(self.window.inputs["title"].currentText(), "Original 0")
+
+        QTest.keyClick(
+            self.window, Qt.Key.Key_Y, Qt.KeyboardModifier.ControlModifier
+        )
+        self._wait_until(lambda: not self.window._undo_in_progress)
+        self.assertEqual(InMemoryTagger.values[self.paths[0]]["title"], "Saved title")
+        self.assertEqual(self.window.inputs["title"].currentText(), "Saved title")
+
+    def test_album_sync_updates_header_without_reordering_or_clearing_id(self):
+        InMemoryTagger.values = {
+            path: dict(metadata)
+            for path, metadata in self.window.album_session.all_files_data.items()
+        }
+        self.window._save_service_factory = lambda: MetadataSaveService(InMemoryTagger)
+        self.window._restore_service_factory = lambda: MetadataRestoreService(InMemoryTagger)
+        original_rows = {
+            path: self.window.file_list.row(self.window._track_item_cache[path])
+            for path in self.paths
+        }
+        self.window.input_mbid.setText("album-mbid")
+        for key, checkbox in self.window.checkboxes.items():
+            checkbox.setChecked(key == "album")
+        album_edit = self.window.inputs["album"].lineEdit()
+        album_edit.selectAll()
+        QTest.keyClicks(album_edit, "Deemo")
+
+        self.window.save_left_only_and_stay()
+        self._wait_until(lambda: not self.window._save_in_progress)
+
+        self.assertTrue(all(
+            InMemoryTagger.values[path]["album"] == "Deemo"
+            for path in self.paths
+        ))
+        self.assertEqual(
+            {
+                path: self.window.file_list.row(self.window._track_item_cache[path])
+                for path in self.paths
+            },
+            original_rows,
+        )
+        header = next(
+            self.window.file_list.item(index)
+            for index in range(self.window.file_list.count())
+            if self.window.file_list.item(index).data(Qt.ItemDataRole.UserRole + 2)
+            == "header"
+        )
+        self.assertEqual(header.text(), "💿 Deemo")
+        self.assertTrue(header.data(Qt.ItemDataRole.UserRole + 6))
+
+        second = self.window._track_item_cache[self.paths[1]]
+        self.window.file_list.blockSignals(True)
+        self.window.file_list.clearSelection()
+        second.setSelected(True)
+        self.window.file_list.setCurrentItem(second)
+        self.window.file_list.blockSignals(False)
+        self.window.on_file_selected()
+
+        self.assertEqual(self.window.input_mbid.text(), "album-mbid")
 
     def test_album_sync_files_share_one_saved_transaction(self):
         InMemoryTagger.values = {

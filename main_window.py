@@ -51,10 +51,12 @@ from undo_manager import (
 # 主界面构建与逻辑
 # =========================================================================
 class MusicEditorWindow(QMainWindow):
-    def __init__(self, fallback_dir):
+    def __init__(self, fallback_dir, window_settings=None):
         super().__init__()
         
         self.music_dir = fallback_dir
+        self.window_settings = copy.deepcopy(window_settings or APP_SETTINGS)
+        self.window_settings["MAIN_MUSIC_DIR"] = fallback_dir
         self.additional_windows = {}
         self.album_session = AlbumSession()
         self.current_cover_data = None
@@ -69,11 +71,18 @@ class MusicEditorWindow(QMainWindow):
         self._physical_album_key_cache = {}
         self._track_item_cache = {}
         self._header_item_cache = {}
+        self._session_modified_album_paths = set()
         self._save_service_factory = MetadataSaveService
         self._restore_service_factory = MetadataRestoreService
         self._local_search_active = False
         self._search_selection_before_filter = set()
+        self._search_hidden_paths = set()
+        self._search_hidden_headers = set()
         self._editor_baseline = None
+        self._loaded_selection_paths = ()
+        self._selection_metadata_baseline = None
+        self._selection_prompt_suppressed = False
+        self._restoring_rejected_selection = False
         self._current_metadata_source = ""
         self._metadata_search_generation = 0
         self._active_metadata_search_id = None
@@ -125,6 +134,10 @@ class MusicEditorWindow(QMainWindow):
         self.mb_labels = {}
         
         self.init_ui()
+        self._search_restore_timer = QTimer(self)
+        self._search_restore_timer.setSingleShot(True)
+        self._search_restore_timer.setInterval(40)
+        self._search_restore_timer.timeout.connect(self.restore_full_list)
         self._connect_undo_capture()
         self._editor_baseline = self._capture_editor_state()
         QApplication.instance().installEventFilter(self)
@@ -169,7 +182,7 @@ class MusicEditorWindow(QMainWindow):
             self.workflow_content.hide()
 
     def init_ui(self):
-        self.setWindowTitle(f"{APP_NAME} - 终极对称美学版")
+        self.setWindowTitle(APP_NAME)
         
         screen_geo = QApplication.primaryScreen().availableGeometry()
         w = min(1600, int(screen_geo.width() * 0.85))
@@ -518,6 +531,7 @@ class MusicEditorWindow(QMainWindow):
             
             cb = TouchComboBox()
             cb.setEditable(True)
+            cb.setCompleter(None)
             cb.lineEdit().setClearButtonEnabled(True)
             cb.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
             cb.setMinimumContentsLength(5)
@@ -701,8 +715,10 @@ class MusicEditorWindow(QMainWindow):
         
         right_scroll = QScrollArea()
         right_scroll.setWidgetResizable(True)
+        right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         right_scroll.setStyleSheet(scroll_style)
         self._enable_touch_scrolling(right_scroll)
+        self.metadata_result_scroll = right_scroll
         
         right_content = QWidget()
         right_content.setObjectName("scroll_content")
@@ -718,9 +734,15 @@ class MusicEditorWindow(QMainWindow):
         
         self.mb_status_label = QLabel("等待提取...")
         self.mb_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.mb_status_label.setWordWrap(True)
+        self.mb_status_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.mb_status_label.setMinimumWidth(0)
         self.mb_status_label.setStyleSheet("color: #7f8c8d; font-size: 12pt; font-weight: bold; padding: 5px;")
         self.mb_score_label = QLabel("")
         self.mb_score_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.mb_score_label.setWordWrap(True)
+        self.mb_score_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.mb_score_label.setMinimumWidth(0)
         self.mb_score_label.setStyleSheet("color: #8e44ad; font-size: 10pt; font-weight: bold;")
 
         source_buttons = QHBoxLayout()
@@ -843,7 +865,9 @@ class MusicEditorWindow(QMainWindow):
 
     def on_search_text_changed(self, text):
         if not text.strip():
-            self.restore_full_list()
+            self._search_restore_timer.start()
+        else:
+            self._search_restore_timer.stop()
 
     def _create_album_index(self):
         self.album_index_targets = {}
@@ -918,6 +942,7 @@ class MusicEditorWindow(QMainWindow):
             self.scroll_to_album_initial(letter)
 
     def perform_local_search(self):
+        self._search_restore_timer.stop()
         query = self.search_input.text().strip().lower()
         if not query:
             self.restore_full_list()
@@ -937,9 +962,10 @@ class MusicEditorWindow(QMainWindow):
         self.on_file_selected()
 
     def restore_full_list(self):
+        self._search_restore_timer.stop()
         if not hasattr(self, "full_sortable_list") or not self._local_search_active:
             return
-        self._set_search_visibility(set(self.album_session.all_files_data))
+        self._restore_search_visibility()
         selected_paths = self._search_selection_before_filter
         self.file_list.blockSignals(True)
         try:
@@ -959,6 +985,33 @@ class MusicEditorWindow(QMainWindow):
         if current:
             self.file_list.smooth_scroll_to_item(current, QAbstractItemView.ScrollHint.PositionAtCenter)
         self.on_file_selected()
+
+    def _restore_search_visibility(self):
+        """Unhide only items hidden by the active filter."""
+        self.file_list.blockSignals(True)
+        self.file_list.setUpdatesEnabled(False)
+        try:
+            for path in self._search_hidden_paths:
+                item = self._track_item_cache.get(path)
+                if item and self.file_list.row(item) >= 0:
+                    item.setHidden(False)
+            for header_id in self._search_hidden_headers:
+                item = self._header_item_cache.get(header_id)
+                if item and self.file_list.row(item) >= 0:
+                    item.setHidden(False)
+            self._search_hidden_paths = set()
+            self._search_hidden_headers = set()
+            self.album_index_targets = {}
+            for item in self._header_item_cache.values():
+                if self.file_list.row(item) < 0 or item.isHidden():
+                    continue
+                initial = album_initial(item.data(Qt.ItemDataRole.UserRole + 5))
+                if initial and initial not in self.album_index_targets:
+                    self.album_index_targets[initial] = item
+        finally:
+            self.file_list.setUpdatesEnabled(True)
+            self.file_list.blockSignals(False)
+        self._update_album_index()
 
     def populate_file_list(self, data_list):
         self._rebuild_file_list(data_list)
@@ -993,20 +1046,28 @@ class MusicEditorWindow(QMainWindow):
             for item_data, f_path in sorted_data_list:
                 group_id = self.album_session.virtual_album_map.get(f_path)
                 orig_album = str(item_data[0]).strip()
+                current_album = str(
+                    self.album_session.all_files_data.get(f_path, {}).get("album", "")
+                ).strip()
                 if group_id:
                     display_album = f"临时编组 💽{group_id}"
                     header_id = f"virtual_{group_id}"
                     anchor_path = self.album_session.virtual_album_anchors.get(group_id)
                     index_album_name = self.album_session.all_files_data.get(anchor_path, {}).get("album", "") or orig_album
                 else:
-                    display_album = orig_album or "未知专辑"
+                    display_album = current_album or orig_album or "未知专辑"
                     album_sort_key, cover_sort_key = self._physical_album_key(f_path)
                     header_id = f"album_{album_sort_key}_{cover_sort_key}"
-                    index_album_name = orig_album
+                    index_album_name = current_album or orig_album
 
                 if header_id != current_header_id:
                     current_header_id = header_id
-                    header_item = self._header_item(header_id, display_album, index_album_name)
+                    header_item = self._header_item(
+                        header_id,
+                        display_album,
+                        index_album_name,
+                        mark_modified=f_path in self._session_modified_album_paths,
+                    )
                     self.file_list.addItem(header_item)
                     initial = album_initial(index_album_name)
                     if initial and initial not in self.album_index_targets:
@@ -1031,7 +1092,14 @@ class MusicEditorWindow(QMainWindow):
             item_data, f_path = item_tuple
             group_id = self.album_session.virtual_album_map.get(f_path)
             album_sort_key, cover_sort_key = self._physical_album_key(f_path)
-            album_initial_rank, album_name_sort_key = album_navigation_sort_key(album_sort_key)
+            stable_album_sort_key = (
+                item_data[0]
+                if f_path in self._session_modified_album_paths
+                else album_sort_key
+            )
+            album_initial_rank, album_name_sort_key = album_navigation_sort_key(
+                stable_album_sort_key
+            )
             if group_id:
                 anchor_initial_rank, anchor_name_sort_key, anchor_cover = group_sort_key(group_id)
                 return (
@@ -1056,7 +1124,9 @@ class MusicEditorWindow(QMainWindow):
             )
         return get_effective_sort_key
 
-    def _header_item(self, header_id, display_album, index_album_name):
+    def _header_item(
+        self, header_id, display_album, index_album_name, mark_modified=False
+    ):
         item = self._header_item_cache.get(header_id)
         if item is None:
             item = QListWidgetItem()
@@ -1072,6 +1142,12 @@ class MusicEditorWindow(QMainWindow):
         item.setText(f"💿 {display_album}")
         item.setData(Qt.ItemDataRole.UserRole + 3, header_id)
         item.setData(Qt.ItemDataRole.UserRole + 5, index_album_name)
+        item.setData(Qt.ItemDataRole.UserRole + 6, mark_modified)
+        item.setForeground(QColor("#8e44ad" if mark_modified else "#7f8c8d"))
+        item.setToolTip(
+            "专辑名称已修改；本次会话保持原列表位置。"
+            if mark_modified else ""
+        )
         return item
 
     def _track_item(self, path):
@@ -1135,12 +1211,20 @@ class MusicEditorWindow(QMainWindow):
             for path, item in self._track_item_cache.items():
                 is_visible = path in visible_paths and self.file_list.row(item) >= 0
                 item.setHidden(not is_visible)
+                if self.file_list.row(item) >= 0 and not is_visible:
+                    self._search_hidden_paths.add(path)
+                else:
+                    self._search_hidden_paths.discard(path)
                 if is_visible:
                     headers_with_tracks.add(item.data(Qt.ItemDataRole.UserRole + 3))
             self.album_index_targets = {}
             for header_id, item in self._header_item_cache.items():
                 is_visible = header_id in headers_with_tracks and self.file_list.row(item) >= 0
                 item.setHidden(not is_visible)
+                if self.file_list.row(item) >= 0 and not is_visible:
+                    self._search_hidden_headers.add(header_id)
+                else:
+                    self._search_hidden_headers.discard(header_id)
                 if is_visible:
                     initial = album_initial(item.data(Qt.ItemDataRole.UserRole + 5))
                     if initial and initial not in self.album_index_targets:
@@ -1241,7 +1325,6 @@ class MusicEditorWindow(QMainWindow):
             self._cancelled_cover_search_ids.discard(request_id)
             return
         was_cancelled = request_id in self._cancelled_cover_search_ids
-        self.overlay.stop()
         if request_id == self._active_cover_search_id:
             self._active_cover_search_id = None
         self._cancelled_cover_search_ids.discard(request_id)
@@ -1280,6 +1363,8 @@ class MusicEditorWindow(QMainWindow):
             worker.deleteLater()
         if getattr(self, "cover_worker", None) is worker:
             self.cover_worker = None
+            if not self.is_metadata_search_running():
+                self.overlay.stop()
 
     def open_current_cover(self, event):
         if event.button() == Qt.MouseButton.LeftButton and self.current_cover_data:
@@ -1494,6 +1579,7 @@ class MusicEditorWindow(QMainWindow):
                 after=after,
                 affected_paths=before.selected_paths,
                 session_before=session_before,
+                session_after=self._capture_lock_session_patch(key),
             ))
             self._editor_baseline = after
 
@@ -1557,25 +1643,26 @@ class MusicEditorWindow(QMainWindow):
         self.mb_labels["disc"].setStyleSheet("font-size: 10pt; font-weight: bold; color: #2c3e50; padding-left: 10px;")
 
     def open_settings(self):
-        dlg = SettingsDialog(self)
+        dlg = SettingsDialog(self, self.window_settings)
         if dlg.exec():
-            APP_SETTINGS["VIP_DOWNLOAD_DIR"] = dlg.ncm_input.text()
-            APP_SETTINGS["MAIN_MUSIC_DIR"] = dlg.main_input.text()
-            APP_SETTINGS["DEEPSEEK_API_KEY"] = dlg.deepseek_key_input.text()
+            self.window_settings["VIP_DOWNLOAD_DIR"] = dlg.ncm_input.text()
+            self.window_settings["MAIN_MUSIC_DIR"] = dlg.main_input.text()
+            self.window_settings["DEEPSEEK_API_KEY"] = dlg.deepseek_key_input.text()
+            APP_SETTINGS.update(self.window_settings)
             save_settings(APP_SETTINGS)
-            if self.music_dir != APP_SETTINGS["MAIN_MUSIC_DIR"]:
-                self.music_dir = APP_SETTINGS["MAIN_MUSIC_DIR"]
+            if self.music_dir != self.window_settings["MAIN_MUSIC_DIR"]:
+                self.music_dir = self.window_settings["MAIN_MUSIC_DIR"]
                 self.load_file_list()
 
     def run_convert(self):
         self.setCursor(Qt.CursorShape.WaitCursor)
-        success, msg = convert_ncm_files(APP_SETTINGS.get("VIP_DOWNLOAD_DIR", ""))
+        success, msg = convert_ncm_files(self.window_settings.get("VIP_DOWNLOAD_DIR", ""))
         self.setCursor(Qt.CursorShape.ArrowCursor)
         if success: QMessageBox.information(self, "转换完毕", msg)
         else: QMessageBox.warning(self, "转换警告", msg)
 
     def confirm_delete_ncm(self):
-        ncm_files = list_ncm_files(APP_SETTINGS.get("VIP_DOWNLOAD_DIR", ""))
+        ncm_files = list_ncm_files(self.window_settings.get("VIP_DOWNLOAD_DIR", ""))
         if not ncm_files:
             QMessageBox.information(self, "没有可删除文件", "下载目录中没有 .ncm 文件。")
             return
@@ -1627,7 +1714,7 @@ class MusicEditorWindow(QMainWindow):
         )
 
     def open_additional_window(self):
-        new_window = MusicEditorWindow(self.music_dir)
+        new_window = MusicEditorWindow(self.music_dir, self.window_settings)
         window_id = id(new_window)
         self.additional_windows[window_id] = new_window
         new_window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
@@ -1637,14 +1724,20 @@ class MusicEditorWindow(QMainWindow):
 
     def run_move(self):
         self.setCursor(Qt.CursorShape.WaitCursor)
-        success, msg = move_audio_files(APP_SETTINGS.get("VIP_DOWNLOAD_DIR", ""), APP_SETTINGS.get("MAIN_MUSIC_DIR", ""))
+        success, msg = move_audio_files(
+            self.window_settings.get("VIP_DOWNLOAD_DIR", ""),
+            self.window_settings.get("MAIN_MUSIC_DIR", ""),
+        )
         self.setCursor(Qt.CursorShape.ArrowCursor)
         if success: self.load_file_list(); QMessageBox.information(self, "移动完毕", msg)
         else: QMessageBox.warning(self, "移动警告", msg)
 
     def run_clean_lrc(self):
         self.setCursor(Qt.CursorShape.WaitCursor)
-        dirs_to_clean = [APP_SETTINGS.get("VIP_DOWNLOAD_DIR", ""), APP_SETTINGS.get("MAIN_MUSIC_DIR", "")]
+        dirs_to_clean = [
+            self.window_settings.get("VIP_DOWNLOAD_DIR", ""),
+            self.window_settings.get("MAIN_MUSIC_DIR", ""),
+        ]
         success, msg = clean_lrc_files(dirs_to_clean)
         self.setCursor(Qt.CursorShape.ArrowCursor)
         QMessageBox.information(self, "清理完毕", msg)
@@ -1819,20 +1912,27 @@ class MusicEditorWindow(QMainWindow):
         if not available:
             return
         self.file_list.blockSignals(True)
-        self.file_list.clearSelection()
-        for item in available:
-            item.setSelected(True)
-        self.file_list.setCurrentItem(available[0])
-        self.file_list.blockSignals(False)
-        self.on_file_selected()
+        self._selection_prompt_suppressed = True
+        try:
+            self.file_list.clearSelection()
+            for item in available:
+                item.setSelected(True)
+            self.file_list.setCurrentItem(available[0])
+        finally:
+            self.file_list.blockSignals(False)
+        try:
+            self.on_file_selected()
+        finally:
+            self._selection_prompt_suppressed = False
         self.file_list.smooth_scroll_to_item(
             available[0], QAbstractItemView.ScrollHint.PositionAtCenter
         )
 
-    def _apply_editor_state(self, command):
-        snapshot = command.before
+    def _apply_editor_state(self, command, redo=False):
+        snapshot = command.after if redo else command.before
+        session_patch = command.session_after if redo else command.session_before
         with self.undo_manager.suspend_recording():
-            self._restore_session_patch(command.session_before)
+            self._restore_session_patch(session_patch)
             if snapshot.selected_paths:
                 self._select_paths_for_undo(snapshot.selected_paths)
             for key, value in snapshot.field_values.items():
@@ -1880,23 +1980,39 @@ class MusicEditorWindow(QMainWindow):
         if self.is_metadata_search_running() or self.is_cover_search_running():
             self.cancel_active_search()
         if isinstance(command, SavedMetadataTransaction):
-            self._start_saved_transaction_undo(command)
+            self._start_saved_transaction_restore(command, redo=False)
             return
-        command = self.undo_manager.pop()
         if isinstance(command, EditorUndoCommand):
-            self._apply_editor_state(command)
+            if self.undo_manager.move_undo_to_redo(command):
+                self._apply_editor_state(command, redo=False)
 
-    def _start_saved_transaction_undo(self, transaction):
+    def perform_redo(self):
+        if self._save_in_progress or self._undo_in_progress:
+            return
+        command = self.undo_manager.peek_redo()
+        if command is None:
+            return
+        if self.is_metadata_search_running() or self.is_cover_search_running():
+            self.cancel_active_search()
+        if isinstance(command, SavedMetadataTransaction):
+            self._start_saved_transaction_restore(command, redo=True)
+            return
+        if isinstance(command, EditorUndoCommand):
+            if self.undo_manager.move_redo_to_undo(command):
+                self._apply_editor_state(command, redo=True)
+
+    def _start_saved_transaction_restore(self, transaction, redo=False):
         if not transaction.changes:
-            self.undo_manager.pop_if_same(transaction)
             return
         self._undo_in_progress = True
         self._undo_transaction = transaction
+        self._undo_is_redo = redo
         self._set_save_controls_enabled(False)
+        action_text = "重做保存" if redo else "撤销保存"
         self.save_progress_dialog = QProgressDialog(
-            "正在准备撤销保存...", None, 0, len(transaction.changes), self
+            f"正在准备{action_text}...", None, 0, len(transaction.changes), self
         )
-        self.save_progress_dialog.setWindowTitle("正在撤销保存")
+        self.save_progress_dialog.setWindowTitle(f"正在{action_text}")
         self.save_progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
         self.save_progress_dialog.setWindowFlag(
             Qt.WindowType.WindowCloseButtonHint, False
@@ -1939,11 +2055,15 @@ class MusicEditorWindow(QMainWindow):
 
     def _finish_saved_transaction_undo(self, result, worker_error=""):
         transaction = getattr(self, "_undo_transaction", None)
+        is_redo = getattr(self, "_undo_is_redo", False)
         try:
             self._close_operation_progress_dialog()
             if result is None:
+                action_text = "重做保存" if is_redo else "撤销保存"
                 QMessageBox.warning(
-                    self, "撤销保存失败", worker_error or "撤销任务意外终止。"
+                    self,
+                    f"{action_text}失败",
+                    worker_error or f"{action_text}任务意外终止。",
                 )
                 return
 
@@ -1953,15 +2073,43 @@ class MusicEditorWindow(QMainWindow):
                 if item:
                     item.setData(Qt.ItemDataRole.UserRole + 1, None)
             restored_paths = list(result.success_files)
+            restored_album_paths = {
+                path
+                for path in restored_paths
+                if transaction is not None
+                and path in transaction.changes
+                and transaction.changes[path].before.album
+                != transaction.changes[path].after.album
+            }
+            self._sync_selected_metadata_after_write(result.restored_metadata)
             self._invalidate_metadata_caches(restored_paths)
-            self._refresh_sortable_metadata()
+            self._refresh_sortable_metadata(preserve_album_order=True)
+            if is_redo:
+                self._session_modified_album_paths.update(restored_album_paths)
+            else:
+                self._session_modified_album_paths.difference_update(
+                    restored_album_paths
+                )
             if transaction is not None:
                 transaction.mark_restored(restored_paths)
                 if transaction.is_complete:
-                    self.undo_manager.pop_if_same(transaction)
+                    replacement = transaction.reversed(
+                        "undo" if is_redo else "redo"
+                    )
+                    if is_redo:
+                        self.undo_manager.move_redo_to_undo(
+                            transaction, replacement
+                        )
+                    else:
+                        self.undo_manager.move_undo_to_redo(
+                            transaction, replacement
+                        )
                 else:
                     self.undo_manager.refresh_limits()
             self.refresh_list_items()
+            self._refresh_saved_album_headers(
+                restored_album_paths, mark_modified=is_redo
+            )
             if restored_paths:
                 self._select_paths_for_undo([restored_paths[0]])
 
@@ -1973,19 +2121,22 @@ class MusicEditorWindow(QMainWindow):
                     f"恢复失败: {os.path.basename(path)}: {result.errors.get(path, '')}"
                 )
             if details:
+                action_text = "重做保存" if is_redo else "撤销保存"
                 self.mb_status_label.setText(
-                    f"撤销保存未完成，仍有 {len(details)} 个文件可重试"
+                    f"{action_text}未完成，仍有 {len(details)} 个文件可重试"
                 )
-                QMessageBox.warning(self, "撤销保存未完成", "\n".join(details))
+                QMessageBox.warning(self, f"{action_text}未完成", "\n".join(details))
             else:
                 self.mb_status_label.setText(
-                    f"已撤销保存 {len(restored_paths)} 个文件"
+                    f"已{'重做' if is_redo else '撤销'}保存 {len(restored_paths)} 个文件"
                 )
         finally:
             self._undo_in_progress = False
             self._set_save_controls_enabled(True)
             self._undo_transaction = None
+            self._undo_is_redo = False
             self._editor_baseline = self._capture_editor_state()
+            self._selection_metadata_baseline = self._capture_selection_metadata_state()
 
     def _cleanup_restore_worker(self):
         worker = self.sender()
@@ -2027,6 +2178,17 @@ class MusicEditorWindow(QMainWindow):
         ):
             key = getattr(event, "key", lambda: None)()
             modifiers = getattr(event, "modifiers", lambda: Qt.KeyboardModifier.NoModifier)()
+            focus = QApplication.focusWidget()
+            native_history_widgets = (
+                self.input_mbid,
+                self.input_apple_collection_id,
+            )
+            if (
+                focus in native_history_widgets
+                and modifiers == Qt.KeyboardModifier.ControlModifier
+                and key in (Qt.Key.Key_Z, Qt.Key.Key_Y)
+            ):
+                return super().eventFilter(watched, event)
             if (
                 key == Qt.Key.Key_Z
                 and modifiers == Qt.KeyboardModifier.ControlModifier
@@ -2034,6 +2196,14 @@ class MusicEditorWindow(QMainWindow):
                 event.accept()
                 if event.type() == QEvent.Type.KeyPress:
                     self.perform_undo()
+                return True
+            if (
+                key == Qt.Key.Key_Y
+                and modifiers == Qt.KeyboardModifier.ControlModifier
+            ):
+                event.accept()
+                if event.type() == QEvent.Type.KeyPress:
+                    self.perform_redo()
                 return True
             if key == Qt.Key.Key_Escape and event.type() == QEvent.Type.KeyPress:
                 if self.cancel_active_search():
@@ -2046,7 +2216,10 @@ class MusicEditorWindow(QMainWindow):
         ):
             key = getattr(event, "key", lambda: None)()
             if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-                self._blocked_key_releases.add(key)
+                if event.type() == QEvent.Type.KeyRelease:
+                    self._blocked_key_releases.discard(key)
+                else:
+                    self._blocked_key_releases.add(key)
             event.accept()
             return True
         if belongs_to_this_window and event.type() == QEvent.Type.KeyRelease:
@@ -2058,6 +2231,35 @@ class MusicEditorWindow(QMainWindow):
         if belongs_to_this_window and event.type() == QEvent.Type.KeyPress:
             key = getattr(event, "key", lambda: None)()
             if key in self._blocked_key_releases:
+                event.accept()
+                return True
+            focus = QApplication.focusWidget()
+            metadata_enter_widgets = (
+                *self.inputs.values(),
+                *(combo.lineEdit() for combo in self.inputs.values()),
+                self.input_mbid,
+                self.input_apple_collection_id,
+                *self.mb_inputs.values(),
+            )
+            if (
+                (watched in metadata_enter_widgets or focus in metadata_enter_widgets)
+                and key in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+            ):
+                modifiers = getattr(
+                    event, "modifiers", lambda: Qt.KeyboardModifier.NoModifier
+                )()
+                if modifiers == Qt.KeyboardModifier.ShiftModifier:
+                    if self.file_list.selectedItems():
+                        self.do_fetch("auto")
+                elif modifiers == Qt.KeyboardModifier.ControlModifier:
+                    if self.file_list.selectedItems():
+                        self.skip_current_files()
+                elif modifiers == Qt.KeyboardModifier.NoModifier:
+                    self._blocked_key_releases.add(key)
+                    if self.file_list.selectedItems():
+                        self.save_current_files()
+                else:
+                    return super().eventFilter(watched, event)
                 event.accept()
                 return True
         if belongs_to_this_window and event.type() == QEvent.Type.FocusOut:
@@ -2078,7 +2280,6 @@ class MusicEditorWindow(QMainWindow):
                 self._cancelled_metadata_search_ids.add(request_id)
             self.pending_cover_fetch = False
             self.worker.cancel()
-            self.overlay.stop()
             for button in self._search_buttons:
                 button.setEnabled(False)
             self.mb_status_label.setText("正在取消元数据搜索...")
@@ -2089,7 +2290,6 @@ class MusicEditorWindow(QMainWindow):
             if request_id is not None:
                 self._cancelled_cover_search_ids.add(request_id)
             self.cover_worker.cancel()
-            self.overlay.stop()
             for button in self._search_buttons:
                 button.setEnabled(False)
             self.mb_status_label.setText("正在取消封面搜索...")
@@ -2121,9 +2321,15 @@ class MusicEditorWindow(QMainWindow):
     def load_file_list(self):
         self.undo_manager.clear()
         self._editor_baseline = None
+        self._loaded_selection_paths = ()
+        self._selection_metadata_baseline = None
+        self._search_restore_timer.stop()
+        self._search_hidden_paths = set()
+        self._search_hidden_headers = set()
         self.file_list.clear()
         self._track_item_cache = {}
         self._header_item_cache = {}
+        self._session_modified_album_paths = set()
         self._cover_fingerprint_cache = {}
         self._physical_album_key_cache = {}
         self.album_session.reset_for_file_load()
@@ -2222,7 +2428,7 @@ class MusicEditorWindow(QMainWindow):
         for path in paths:
             self._physical_album_key_cache.pop(path, None)
 
-    def _refresh_sortable_metadata(self):
+    def _refresh_sortable_metadata(self, preserve_album_order=False):
         if not hasattr(self, "full_sortable_list"):
             return
 
@@ -2230,19 +2436,72 @@ class MusicEditorWindow(QMainWindow):
             number = str(value).split("/", 1)[0]
             return int(number) if number.isdigit() else 0
 
-        self.full_sortable_list = [
-            (
+        refreshed = []
+        for old_sort_data, path in self.full_sortable_list:
+            data = self.album_session.all_files_data.get(path, {})
+            album_sort_value = (
+                old_sort_data[0]
+                if preserve_album_order
+                else data.get("album", "")
+            )
+            refreshed.append((
                 (
-                    data.get("album", ""),
+                    album_sort_value,
                     tag_number(data.get("disc", "")),
                     tag_number(data.get("track", "")),
                     os.path.basename(path),
                 ),
                 path,
+            ))
+        self.full_sortable_list = refreshed
+
+    def _refresh_saved_album_headers(self, paths, mark_modified=True):
+        if mark_modified:
+            self._session_modified_album_paths.update(paths)
+        else:
+            self._session_modified_album_paths.difference_update(paths)
+        header_ids = {
+            item.data(Qt.ItemDataRole.UserRole + 3)
+            for path in paths
+            for item in (self._track_item_cache.get(path),)
+            if item is not None and self.file_list.row(item) >= 0
+        }
+        for header_id in header_ids:
+            if not str(header_id).startswith("album_"):
+                continue
+            albums = {
+                str(self.album_session.all_files_data.get(path, {}).get("album", "")).strip()
+                for path, item in self._track_item_cache.items()
+                if self.file_list.row(item) >= 0
+                and item.data(Qt.ItemDataRole.UserRole + 3) == header_id
+            }
+            albums.discard("")
+            if len(albums) != 1:
+                continue
+            album = next(iter(albums))
+            header = self._header_item_cache.get(header_id)
+            if header is None:
+                continue
+            header.setText(f"💿 {album}")
+            header.setData(Qt.ItemDataRole.UserRole + 5, album)
+            header.setData(Qt.ItemDataRole.UserRole + 6, mark_modified)
+            header.setForeground(QColor("#8e44ad" if mark_modified else "#7f8c8d"))
+            header.setToolTip(
+                "专辑名称已修改；本次会话保持原列表位置。"
+                if mark_modified else ""
             )
-            for _, path in self.full_sortable_list
-            for data in (self.album_session.all_files_data.get(path, {}),)
-        ]
+
+    def _sync_selected_metadata_after_write(self, metadata_by_path):
+        for path, metadata in metadata_by_path.items():
+            if path in self.album_session.selected_files_data:
+                self.album_session.selected_files_data[path] = metadata
+        selected_albums = {
+            str(self.album_session.all_files_data.get(path, {}).get("album", "")).strip()
+            for path in self._loaded_selection_paths
+            if path in self.album_session.all_files_data
+        }
+        if len(selected_albums) == 1:
+            self.album_session.last_selected_album = next(iter(selected_albums))
 
     def _album_source_key(self, path):
         group_id = self.album_session.virtual_album_map.get(path)
@@ -2284,10 +2543,69 @@ class MusicEditorWindow(QMainWindow):
         return selected
 
     def on_file_selected(self):
+        new_paths = tuple(
+            self._item_path(item)
+            for item in self.file_list.selectedItems()
+            if item.data(Qt.ItemDataRole.UserRole + 2) == "track"
+        )
+        selection_changed = set(new_paths) != set(self._loaded_selection_paths)
+        if (
+            selection_changed
+            and self._loaded_selection_paths
+            and not self._selection_prompt_suppressed
+            and not self._restoring_rejected_selection
+            and self._has_unsaved_metadata_changes()
+        ):
+            answer = QMessageBox.question(
+                self,
+                "存在未保存的修改",
+                "当前选择的元数据尚未保存。是否仍要切换到其他文件？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                self._restore_rejected_selection()
+                return
+        elif not selection_changed and self._has_unsaved_metadata_changes():
+            return
+
         with self.undo_manager.suspend_recording():
             self._on_file_selected_without_undo()
+        self._loaded_selection_paths = new_paths
+        self._selection_metadata_baseline = self._capture_selection_metadata_state()
         self.undo_manager.break_merge()
         self._editor_baseline = self._capture_editor_state()
+
+    def _capture_selection_metadata_state(self):
+        cover = bytes(self.current_cover_data) if self.current_cover_data else None
+        return (
+            tuple((key, combo.currentText()) for key, combo in self.inputs.items()),
+            cover,
+            self._cover_is_mixed,
+            self.cover_modified_in_batch,
+        )
+
+    def _has_unsaved_metadata_changes(self):
+        if self._selection_metadata_baseline is None:
+            return False
+        return self._capture_selection_metadata_state() != self._selection_metadata_baseline
+
+    def _restore_rejected_selection(self):
+        self._restoring_rejected_selection = True
+        self.file_list.blockSignals(True)
+        try:
+            self.file_list.clearSelection()
+            current = None
+            for path in self._loaded_selection_paths:
+                item = self._track_item_cache.get(path)
+                if item and self.file_list.row(item) >= 0:
+                    item.setSelected(True)
+                    current = current or item
+            if current:
+                self.file_list.setCurrentItem(current)
+        finally:
+            self.file_list.blockSignals(False)
+            self._restoring_rejected_selection = False
 
     def _on_file_selected_without_undo(self):
         items = [item for item in self.file_list.selectedItems() if item.data(Qt.ItemDataRole.UserRole + 2) == "track"]
@@ -2436,7 +2754,6 @@ class MusicEditorWindow(QMainWindow):
             self._cancelled_metadata_search_ids.discard(request_id)
             return
         was_cancelled = request_id in self._cancelled_metadata_search_ids
-        self.overlay.stop() 
         if request_id == self._active_metadata_search_id:
             self._active_metadata_search_id = None
         self._cancelled_metadata_search_ids.discard(request_id)
@@ -2507,6 +2824,8 @@ class MusicEditorWindow(QMainWindow):
             worker.deleteLater()
         if getattr(self, "worker", None) is worker:
             self.worker = None
+            if not self.is_cover_search_running():
+                self.overlay.stop()
 
     def _set_available_sources(self, source_results, selected_source):
         self.available_source_results = source_results or {}
@@ -2548,6 +2867,7 @@ class MusicEditorWindow(QMainWindow):
             after=editor_after,
             affected_paths=editor_before.selected_paths,
             session_before=session_before.detached_copy(),
+            session_after=self._capture_source_session_patch().detached_copy(),
         ))
         self._editor_baseline = editor_after
 
@@ -2621,9 +2941,18 @@ class MusicEditorWindow(QMainWindow):
         while next_row < self.file_list.count():
             item = self.file_list.item(next_row)
             if item.data(Qt.ItemDataRole.UserRole + 2) == "track":
-                self.file_list.clearSelection()
-                item.setSelected(True)
-                self.file_list.setCurrentItem(item)
+                self._selection_prompt_suppressed = True
+                self.file_list.blockSignals(True)
+                try:
+                    self.file_list.clearSelection()
+                    item.setSelected(True)
+                    self.file_list.setCurrentItem(item)
+                finally:
+                    self.file_list.blockSignals(False)
+                try:
+                    self.on_file_selected()
+                finally:
+                    self._selection_prompt_suppressed = False
                 QTimer.singleShot(0, lambda target=item, y=anchor_y: self._align_item_to_viewport_y(target, y))
                 if auto_search:
                     QTimer.singleShot(250, lambda: self.do_fetch("auto", is_auto=True))
@@ -2774,7 +3103,11 @@ class MusicEditorWindow(QMainWindow):
             return
         operation = "专辑同步" if kind == "sync" else "直接保存"
         if kind == "restore":
-            operation = "撤销保存"
+            operation = (
+                "重做保存"
+                if getattr(self, "_undo_is_redo", False)
+                else "撤销保存"
+            )
         dialog.setMaximum(max(1, total))
         dialog.setValue(current - 1)
         label = dialog.fontMetrics().elidedText(filename, Qt.TextElideMode.ElideMiddle, 380)
@@ -2793,8 +3126,17 @@ class MusicEditorWindow(QMainWindow):
                 return
             for path, metadata in result.saved_metadata.items():
                 self.album_session.all_files_data[path] = metadata
+            self._sync_selected_metadata_after_write(result.saved_metadata)
             self._invalidate_metadata_caches(result.saved_metadata)
-            self._refresh_sortable_metadata()
+            self._refresh_sortable_metadata(preserve_album_order=True)
+            changed_album_paths = {
+                item.path
+                for item in result.successful_items
+                if "album" in item.metadata
+            }
+            self._refresh_saved_album_headers(
+                changed_album_paths, mark_modified=True
+            )
 
             saved_paths = {item.path for item in result.successful_items if item.kind == "primary"}
             track_items_by_path = context["track_items_by_path"]
@@ -2816,7 +3158,7 @@ class MusicEditorWindow(QMainWindow):
             ]
 
             self.update_list_display()
-            self.setWindowTitle(f"{APP_NAME} - 终极对称美学版")
+            self.setWindowTitle(APP_NAME)
 
             if cleaned_163key:
                 self.mb_status_label.setText("✨ 网易云 163key 专属垃圾已被彻底清理！")
@@ -2849,6 +3191,11 @@ class MusicEditorWindow(QMainWindow):
                 self.undo_manager.push(
                     SavedMetadataTransaction.create(successful_changes)
                 )
+
+            if set(context.get("selected_paths", ())).issubset(result.saved_metadata):
+                self.cover_modified_in_batch = False
+                self._selection_metadata_baseline = self._capture_selection_metadata_state()
+                self._editor_baseline = self._capture_editor_state()
 
             if context["advance"] and saved_paths:
                 self.advance_to_next_item(context["items"], auto_search=True)

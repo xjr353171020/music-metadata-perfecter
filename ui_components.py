@@ -57,22 +57,23 @@ class LoadingOverlay(QWidget):
         self.timer.stop(); self.hide()
 
 class SettingsDialog(QDialog):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, settings=None):
         super().__init__(parent)
+        settings = settings or APP_SETTINGS
         self.setWindowTitle("⚙️ 设置工作目录")
         self.resize(550, 195)
         layout = QFormLayout(self)
-        self.ncm_input = QLineEdit(APP_SETTINGS.get("VIP_DOWNLOAD_DIR", ""))
+        self.ncm_input = QLineEdit(settings.get("VIP_DOWNLOAD_DIR", ""))
         btn_ncm = QPushButton("浏览...")
         btn_ncm.clicked.connect(lambda: self.browse_dir(self.ncm_input))
         row1 = QHBoxLayout(); row1.addWidget(self.ncm_input); row1.addWidget(btn_ncm)
         layout.addRow("NCM 下载目录:", row1)
-        self.main_input = QLineEdit(APP_SETTINGS.get("MAIN_MUSIC_DIR", ""))
+        self.main_input = QLineEdit(settings.get("MAIN_MUSIC_DIR", ""))
         btn_main = QPushButton("浏览...")
         btn_main.clicked.connect(lambda: self.browse_dir(self.main_input))
         row2 = QHBoxLayout(); row2.addWidget(self.main_input); row2.addWidget(btn_main)
         layout.addRow("主曲库目录:", row2)
-        self.deepseek_key_input = QLineEdit(APP_SETTINGS.get("DEEPSEEK_API_KEY", ""))
+        self.deepseek_key_input = QLineEdit(settings.get("DEEPSEEK_API_KEY", ""))
         self.deepseek_key_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.deepseek_key_input.setPlaceholderText("可留空；也可使用环境变量 DEEPSEEK_API_KEY")
         layout.addRow("DeepSeek API Key:", self.deepseek_key_input)

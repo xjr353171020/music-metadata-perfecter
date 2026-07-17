@@ -80,6 +80,11 @@ def parse_artist_credit(artist_credit):
     return "\\\\".join(names)
 
 
+def select_release_track_title(track_title, recording_title):
+    """Prefer the title printed on this release over the shared recording title."""
+    return str(track_title or recording_title or "").strip()
+
+
 def get_artist_identities(artist_credit, raw_json_list, cancel_event=None):
     """Fetch canonical MusicBrainz artist evidence for name localization."""
     identities = []
@@ -463,7 +468,9 @@ def search_mb(title, artist, album, local_track, local_disc, mbid_override="",
                 print(f"Step 3 Recording detail error: {e}")
 
         if recording_detail:
-            if recording_detail.get("title"): final_title = recording_detail.get("title")
+            final_title = select_release_track_title(
+                best_track["track_title"], recording_detail.get("title")
+            )
             if recording_detail.get("artist-credit"):
                 final_artist_credit = recording_detail.get("artist-credit")
                 final_artist = parse_artist_credit(final_artist_credit)

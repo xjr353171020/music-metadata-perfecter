@@ -5,6 +5,9 @@ import glob
 import shutil
 import subprocess
 
+
+WINDOWS_COMMAND_LINE_LIMIT = 30000
+
 def get_bundled_exe_path():
     """
     智能获取 Ncm拖一拖.exe 的路径。
@@ -20,6 +23,22 @@ def get_bundled_exe_path():
         
     return os.path.join(base_path, "Ncm拖一拖.exe")
 
+def _converter_batches(converter_exe, ncm_files, limit=WINDOWS_COMMAND_LINE_LIMIT):
+    """Pack as many NCM paths as possible into each Windows command line."""
+    batches = []
+    current = []
+    for path in ncm_files:
+        candidate = [converter_exe, *current, path]
+        if current and len(subprocess.list2cmdline(candidate)) > limit:
+            batches.append(current)
+            current = [path]
+        else:
+            current.append(path)
+    if current:
+        batches.append(current)
+    return batches
+
+
 def convert_ncm_files(ncm_dir):
     ncm_files = list_ncm_files(ncm_dir)
     if not ncm_files: 
@@ -32,14 +51,29 @@ def convert_ncm_files(ncm_dir):
         return False, f"严重错误：未找到内置转换工具！\n预期路径: {converter_exe}\n请确认打包时已将 Ncm拖一拖.exe 包含在内。"
 
     success_count = 0
-    for ncm_file in ncm_files:
-        try: 
-            # Keep the source NCM until the user explicitly reviews and deletes it.
-            subprocess.run([converter_exe, ncm_file], check=True)
-            success_count += 1
-        except Exception as e: 
-            print(f"转换失败 [{os.path.basename(ncm_file)}]: {e}")
-            
+    failed_batches = []
+    for batch in _converter_batches(converter_exe, ncm_files):
+        try:
+            # The converter accepts multiple Explorer-style dropped paths.
+            subprocess.run(
+                [converter_exe, *batch],
+                check=True,
+                cwd=ncm_dir,
+            )
+            success_count += len(batch)
+        except Exception as exc:
+            failed_batches.append((batch, exc))
+            print(
+                "转换失败 "
+                f"[{', '.join(os.path.basename(path) for path in batch)}]: {exc}"
+            )
+
+    if failed_batches:
+        failed_count = sum(len(batch) for batch, _ in failed_batches)
+        return False, (
+            f"解密完成，但有失败：成功 {success_count} 个，失败 {failed_count} 个。"
+            "原始 NCM 均已保留。"
+        )
     return True, f"解密完成！共成功解密 {success_count} 个 NCM 文件，原始 NCM 已保留。"
 
 

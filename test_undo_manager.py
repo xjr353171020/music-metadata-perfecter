@@ -50,6 +50,40 @@ class UndoManagerTests(unittest.TestCase):
         self.assertFalse(manager.can_undo)
         self.assertEqual(manager.memory_bytes, 0)
 
+    def test_undo_and_redo_stacks_move_commands_and_new_push_clears_redo(self):
+        manager = UndoManager()
+        command = EditorUndoCommand(
+            "title", self._state("A"), self._state("B"), ("one.mp3",)
+        )
+        manager.push(command)
+
+        self.assertTrue(manager.move_undo_to_redo(manager.peek()))
+        self.assertFalse(manager.can_undo)
+        self.assertTrue(manager.can_redo)
+        redo_command = manager.peek_redo()
+        self.assertTrue(manager.move_redo_to_undo(redo_command))
+        self.assertTrue(manager.can_undo)
+        self.assertFalse(manager.can_redo)
+
+        manager.move_undo_to_redo(manager.peek())
+        manager.push(EditorUndoCommand("new", self._state("B"), self._state("C")))
+        self.assertFalse(manager.can_redo)
+
+    def test_saved_transaction_builds_a_reversed_redo_transaction(self):
+        before = ManagedMetadataSnapshot(title="before")
+        after = ManagedMetadataSnapshot(title="after")
+        transaction = SavedMetadataTransaction.create([
+            SavedFileChange("one.mp3", before, after)
+        ])
+        transaction.mark_restored(["one.mp3"])
+
+        redo = transaction.reversed("redo")
+
+        change = redo.changes["one.mp3"]
+        self.assertEqual(redo.action, "redo")
+        self.assertEqual(change.before.title, "after")
+        self.assertEqual(change.after.title, "before")
+
     def test_cover_bytes_are_deduplicated_and_limits_evict_oldest(self):
         manager = UndoManager(max_commands=2)
         cover = b"same-cover" * 100

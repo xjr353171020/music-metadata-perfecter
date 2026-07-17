@@ -39,7 +39,7 @@ def save_settings(settings):
 APP_SETTINGS = load_settings()
 
 APP_NAME = "Music Metadata Perfecter"
-APP_VERSION = "2026.07.16.2"
+APP_VERSION = "2026.07.17.1"
 USER_AGENT_APP = "MyMusicOrganizer"
 USER_AGENT_VERSION = "6.0"
 USER_AGENT_CONTACT = "xjr353171020@126.com"

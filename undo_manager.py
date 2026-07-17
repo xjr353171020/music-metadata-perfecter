@@ -126,6 +126,7 @@ class EditorUndoCommand:
     merge_key: str | None = None
     timestamp: float = field(default_factory=time.monotonic)
     session_before: SessionPatch | None = None
+    session_after: SessionPatch | None = None
 
 
 @dataclass(frozen=True)
@@ -142,12 +143,19 @@ class SavedMetadataTransaction:
     description: str
     changes: dict[str, SavedFileChange]
     original_count: int
+    action: str = "undo"
+    restored_changes: dict[str, SavedFileChange] = field(default_factory=dict)
 
     @classmethod
-    def create(cls, changes: Iterable[SavedFileChange]) -> "SavedMetadataTransaction":
+    def create(
+        cls,
+        changes: Iterable[SavedFileChange],
+        action: str = "undo",
+    ) -> "SavedMetadataTransaction":
         change_map = {change.path: change for change in changes}
         count = len(change_map)
-        return cls(f"撤销保存 {count} 个文件", change_map, count)
+        label = "撤销保存" if action == "undo" else "重做保存"
+        return cls(f"{label} {count} 个文件", change_map, count, action)
 
     @property
     def affected_paths(self) -> tuple[str, ...]:
@@ -159,9 +167,25 @@ class SavedMetadataTransaction:
 
     def mark_restored(self, paths: Iterable[str]) -> None:
         for path in paths:
-            self.changes.pop(path, None)
+            change = self.changes.pop(path, None)
+            if change is not None:
+                self.restored_changes[path] = change
         if self.changes:
-            self.description = f"重试撤销保存 {len(self.changes)} 个文件"
+            label = "撤销保存" if self.action == "undo" else "重做保存"
+            self.description = f"重试{label} {len(self.changes)} 个文件"
+
+    def reversed(self, action: str) -> "SavedMetadataTransaction":
+        return SavedMetadataTransaction.create(
+            (
+                SavedFileChange(
+                    path=change.path,
+                    before=change.after,
+                    after=change.before,
+                )
+                for change in self.restored_changes.values()
+            ),
+            action=action,
+        )
 
 
 class UndoManager:
@@ -177,6 +201,7 @@ class UndoManager:
         self.max_bytes = max_bytes
         self.merge_window_seconds = merge_window_seconds
         self._commands: list[EditorUndoCommand | SavedMetadataTransaction] = []
+        self._redo_commands: list[EditorUndoCommand | SavedMetadataTransaction] = []
         self._recording_suspensions = 0
         self._merge_block = 0
         self._memory_bytes = 0
@@ -187,8 +212,16 @@ class UndoManager:
         return bool(self._commands)
 
     @property
+    def can_redo(self) -> bool:
+        return bool(self._redo_commands)
+
+    @property
     def count(self) -> int:
         return len(self._commands)
+
+    @property
+    def redo_count(self) -> int:
+        return len(self._redo_commands)
 
     @property
     def memory_bytes(self) -> int:
@@ -211,12 +244,16 @@ class UndoManager:
 
     def clear(self) -> None:
         self._commands.clear()
+        self._redo_commands.clear()
         self._cover_pool.clear()
         self._memory_bytes = 0
         self.break_merge()
 
     def peek(self) -> EditorUndoCommand | SavedMetadataTransaction | None:
         return self._commands[-1] if self._commands else None
+
+    def peek_redo(self) -> EditorUndoCommand | SavedMetadataTransaction | None:
+        return self._redo_commands[-1] if self._redo_commands else None
 
     def pop(self) -> EditorUndoCommand | SavedMetadataTransaction | None:
         if not self._commands:
@@ -234,9 +271,40 @@ class UndoManager:
             return True
         return False
 
+    def move_undo_to_redo(
+        self,
+        command: object,
+        replacement: EditorUndoCommand | SavedMetadataTransaction | None = None,
+    ) -> bool:
+        if not self._commands or self._commands[-1] is not command:
+            return False
+        self._commands.pop()
+        self._redo_commands.append(
+            self._intern_command_covers(replacement or command)
+        )
+        self._recalculate_memory()
+        self.break_merge()
+        return True
+
+    def move_redo_to_undo(
+        self,
+        command: object,
+        replacement: EditorUndoCommand | SavedMetadataTransaction | None = None,
+    ) -> bool:
+        if not self._redo_commands or self._redo_commands[-1] is not command:
+            return False
+        self._redo_commands.pop()
+        self._commands.append(
+            self._intern_command_covers(replacement or command)
+        )
+        self._recalculate_memory()
+        self.break_merge()
+        return True
+
     def push(self, command: EditorUndoCommand | SavedMetadataTransaction) -> None:
         if self.recording_suspended:
             return
+        self._redo_commands.clear()
         command = self._intern_command_covers(command)
         if self._can_merge(command):
             previous = self._commands[-1]
@@ -264,6 +332,14 @@ class UndoManager:
                 and path_set.intersection(command.affected_paths)
             )
         ]
+        self._redo_commands = [
+            command
+            for command in self._redo_commands
+            if not (
+                isinstance(command, EditorUndoCommand)
+                and path_set.intersection(command.affected_paths)
+            )
+        ]
         self._recalculate_memory()
         self.break_merge()
 
@@ -280,7 +356,12 @@ class UndoManager:
     def _can_merge(self, command: object) -> bool:
         if self._merge_block or not isinstance(command, EditorUndoCommand):
             return False
-        if not command.merge_key or command.session_before is not None or not self._commands:
+        if (
+            not command.merge_key
+            or command.session_before is not None
+            or command.session_after is not None
+            or not self._commands
+        ):
             return False
         previous = self._commands[-1]
         return (
@@ -323,21 +404,24 @@ class UndoManager:
 
     def _enforce_limits(self) -> None:
         self._recalculate_memory()
-        while self._commands and (
-            len(self._commands) > self.max_commands
+        while (self._commands or self._redo_commands) and (
+            len(self._commands) + len(self._redo_commands) > self.max_commands
             or self._memory_bytes > self.max_bytes
         ):
-            self._commands.pop(0)
+            if self._commands:
+                self._commands.pop(0)
+            else:
+                self._redo_commands.pop(0)
             self._recalculate_memory()
 
     def _recalculate_memory(self) -> None:
         seen_bytes: set[int] = set()
         self._memory_bytes = sum(
             _estimate_size(command, seen_bytes)
-            for command in self._commands
+            for command in (*self._commands, *self._redo_commands)
         )
         live_covers: dict[str, bytes] = {}
-        _collect_covers(self._commands, live_covers)
+        _collect_covers((self._commands, self._redo_commands), live_covers)
         self._cover_pool = live_covers
 
 

@@ -42,9 +42,9 @@ main.py
   -> QApplication.exec()
 ```
 
-There is no command-line configuration parser, dependency bootstrap, settings schema validation, or database initialization. If the configured directory does not exist, `load_file_list()` returns without starting a loader. An additional window creates a completely new `MusicEditorWindow` and per-window session, while still sharing process-global settings and Provider caches.
+There is no command-line configuration parser, dependency bootstrap, settings schema validation, or database initialization. If the configured directory does not exist, `load_file_list()` returns without starting a loader. An additional window creates a completely new `MusicEditorWindow`, session, and runtime settings copy. Saving settings still updates the process-global persisted defaults and Provider configuration, but already-open windows keep their own workflow/music-directory values. Provider caches remain process-global.
 
-`APP_NAME` is the single user-facing product name used by window titles, startup logs, and the machine-local shortcut. `APP_VERSION` is the single release/log version source. Each behavior-changing iteration updates that constant once; log producers consume it rather than maintaining independent versions. The `v` marker belongs to filenames and display headers, while the configured value itself is currently shaped like `2026.07.16.2`.
+`APP_NAME` is the single user-facing product name used by window titles, startup logs, and the machine-local shortcut. `APP_VERSION` is the single release/log version source. Each behavior-changing iteration updates that constant once; log producers consume it rather than maintaining independent versions. The `v` marker belongs to filenames and display headers, while the configured value itself is currently shaped like `2026.07.17.1`.
 
 For development without VS Code, the supported machine-local entry point is the `Music Metadata Perfecter` Windows desktop shortcut discoverable by searching `meta` in Listary. Its target is the absolute interpreter configured in `.vscode/settings.json`, its argument is the absolute repository `main.py`, and its working directory is the repository root. The shortcut is outside the repository and is not a portable configuration artifact. It does not need to change for normal iterations while those two paths remain stable. Startup through this shortcut follows the same `main.py` path and writes the same runtime log, so diagnostics do not depend on a visible console.
 
@@ -59,7 +59,7 @@ For development without VS Code, the supported machine-local entry point is the 
 | `save_plan.py` | `SavePlanRequest`, `SaveItem`, `SavePlan`, `build_save_plan`; pure primary/dependent write rules | stdlib only | Qt, taggers, filesystem I/O | High |
 | `metadata_save_service.py` | `MetadataSaveService`, `MetadataRestoreService`, result DTOs; snapshot, execute, read back, conflict-check | `audio_tagger`, `save_plan`, `undo_manager` | Widget state, Provider logic | High |
 | `audio_tagger.py` | `AudioTagger`; MP3 ID3 and FLAC read/update/exact managed restore | Mutagen; optional Pillow | UI, album sync, Provider matching | High |
-| `undo_manager.py` | Editor/saved snapshots, `SessionPatch`, saved transactions, strict LIFO history and limits | stdlib only | Applying widgets or writing files | High |
+| `undo_manager.py` | Editor/saved snapshots, `SessionPatch`, saved transactions, LIFO undo/redo stacks and limits | stdlib only | Applying widgets or writing files | High |
 | `metadata_api.py` | Run both Providers, normalize cross-source scores, select a default, retain both results | Provider adapters, cancellation | UI, tag writing | High |
 | `mb_api.py` | MusicBrainz release/recording/artist requests, matching, identities, caches, pacing | `requests`, `config`, cancellation | UI, Apple rules, tag writes | High |
 | `apple_music_api.py` | iTunes collection/track search, storefront strategy, matching, localization calls, caches | `requests`, MB similarity helpers, resolver, cancellation | UI, tag writes | High |
@@ -115,6 +115,7 @@ Remaining coupling in `main_window.py` is real rather than merely line-count rel
 | `inputs` / `checkboxes` | Window widgets | Current selection/edit | Authoritative pending unsaved text and elected fields |
 | visible lock buttons | Window widgets | Current selection | Mirror of the first selected path; toggling applies to all selected paths |
 | `_editor_baseline` | Window | Replaced after selection/action | Mirrored last captured widget snapshot used to form undo commands |
+| `_selection_metadata_baseline` | Window | Replaced after selection/save/restore | Text/cover baseline used to warn before abandoning unsaved metadata edits |
 | `current_cover_data` | Window | Current selection/edit | Pending cover bytes or `None`; paired with `_cover_is_mixed` and `cover_modified_in_batch` |
 | `mb_inputs`, `available_source_results`, `_current_metadata_source` | Window | Current Provider result | Displayed candidate and source map; result-level source selection |
 | `api_cache[path]` | Window | Until directory reload | Cached normalized Provider result, raw logs, and display strings |
@@ -122,12 +123,12 @@ Remaining coupling in `main_window.py` is real rather than merely line-count rel
 | `_physical_album_key_cache`, `_cover_fingerprint_cache` | Window | Invalidated on known metadata updates | Derived album/cover identity acceleration |
 | `_track_item_cache`, `_header_item_cache` | Window | Directory/list lifetime | Derived Qt object identity, not metadata truth |
 | request generations/active IDs/cancelled-ID sets | Window | Per window/process run | Async identity and stale-completion protection |
-| `UndoManager` history | Window | Until directory reload/window close | Authoritative in-memory editor/save undo stack |
+| `UndoManager` history | Window | Until directory reload/window close | Authoritative in-memory editor/save undo and redo stacks; a new command clears redo |
 | MB/Apple/resolver caches | Provider modules | Python process lifetime | Process-global network/decision cache shared by windows |
 
 Parallel-source risks:
 
-- `selected_files_data` is rebuilt only on selection. `all_files_data[path]` is replaced after save/restore, so the selection mirror can temporarily refer to an older dict until selection is refreshed.
+- `selected_files_data` is rebuilt on selection and explicitly refreshed for successful save/restore read-back affecting the current selection.
 - Widget edits are intentionally not copied into `all_files_data` until a successful write, except the existing lock-propagation path, which updates synchronized in-memory fields immediately.
 - `api_cache` is per file and is not generally invalidated by a metadata save; source preference uses album plus cover identity and may change when those fields change.
 - Files changed outside the application make `all_files_data` stale until reload/read-back. Saved restore detects managed-field divergence only when undo is attempted.
@@ -141,7 +142,7 @@ Parallel-source risks:
 | Loaded state | `on_load_finished()` / `AlbumSession` | worker dict -> `all_files_data`, sortable list | UI thread; in-memory dict becomes current window truth |
 | Selection | `MusicEditorWindow` | selected paths -> `selected_files_data`, mixed/single combo values, cover state | Reads file directly only if path absent from loaded state; selection view is derived |
 | Search request | `do_fetch()` | first selected path plus visible title/artist/album/track/disc and optional IDs -> `FetchWorker` arguments | UI validates required title/track clues; first selected item supplies local debug metadata |
-| MusicBrainz | `mb_api.search_mb()` | local clues/MBID -> normalized MB dict, raw records | Cooperative cancellation; 10 s requests, paced waits; failure returns status/data tuple |
+| MusicBrainz | `mb_api.search_mb()` | local clues/MBID -> normalized MB dict, raw records | Cooperative cancellation; 10 s requests, paced waits; release track titles override shared recording titles, and artist credits use the application multi-value separator |
 | Apple | `apple_music_api.search_apple_music()` | clues, MB artist identities, optional collection ID -> normalized Apple dict | Cooperative cancellation; 12 s requests; no live retry in this adapter |
 | Cross-source comparison | `metadata_api.search_metadata()` | successful source dicts -> one default dict plus `source_results` | Direct IDs override fuzzy choice; textual tie prefers MB; failure only if both fail |
 | Artist presentation | Apple adapter + resolver | Apple storefront variants + MB identities -> one existing artist/album-artist pair | Optional DeepSeek tie-break is a selector; its 15 s request lacks cancellation input |
@@ -151,9 +152,9 @@ Parallel-source risks:
 | Save planning | `build_save_plan()` | request -> immutable `SavePlan` of primary/sync items | Pure; no cancellation; request/session state is source |
 | Save execution | `SaveWorker` + `MetadataSaveService` | plan -> before snapshots, writes, read-back `SaveResult` | Per-item failures continue; dependencies require primary success; no rollback/cancel |
 | Tag mutation | `AudioTagger.update_tags()` | partial metadata payload -> MP3/FLAC managed tags | Tagger owns encoding and cover replacement; file becomes persistent truth |
-| In-memory refresh | `_finish_save()` | successful read-back -> `all_files_data`, sort/list status | Failed/skipped paths retain previous in-memory values |
+| In-memory refresh | `_finish_save()` | successful read-back -> `all_files_data`, current selection mirror, list status/header | Album rename headers update in place and retain their current-session order; failed/skipped paths keep previous values |
 | Saved undo record | `_finish_save()` / `UndoManager` | before/after successful snapshots -> one `SavedMetadataTransaction` | In-memory only; successful paths' editor commands are discarded first |
-| Restore | `RestoreWorker` + `MetadataRestoreService` | saved changes -> conflict-checked exact managed restore -> read-back | Current fingerprint must equal recorded `after`; successes removed from retryable transaction |
+| Restore/redo | `RestoreWorker` + `MetadataRestoreService` | saved changes or their reversed snapshots -> conflict-checked exact managed restore -> read-back | Current fingerprint must equal recorded `after`; partial operations remain retryable in their current undo/redo stack |
 
 MusicBrainz and Apple run sequentially inside one fetch worker. A successful search never writes local tags automatically. Source switching selects a complete normalized result, after which the user may apply individual fields or all eligible fields.
 
@@ -197,6 +198,8 @@ The normalized managed shape contains these text fields plus binary cover state:
 Text uses Vorbis fields `title`, `artist`, `album`, `albumartist`, `composer`, `tracknumber`, `discnumber`, `date`, and `genre`. Date falls back to `year`; writing `date` removes `year`. Comments combine `comment`, `description`, and keys containing `163 key`; writing removes those managed comment forms and writes values to `description`. The first FLAC picture is read; cover writes clear all pictures and add one front-cover `Picture`.
 
 The application-level multi-value separator is the literal two-backslash string `\\`. MP3 frames and FLAC value lists are joined to this string on read and split on write for artist, album artist, composer, and genre. Track/disc values are not reformatted for writing; Provider matching uses the first numeric substring, and list sorting uses the portion before `/` only when it is entirely numeric.
+
+MusicBrainz artist credits discard Provider joinphrases such as `feat.`, `Remixed by`, `&`, or punctuation and join all non-empty credit names with the same application-level multi-value separator.
 
 An exact `VA` after removing dots/spaces is normalized to `Various Artists` during tag reading and MusicBrainz input preparation. This normalization is not a general artist canonicalizer.
 

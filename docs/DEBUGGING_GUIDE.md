@@ -257,7 +257,7 @@ Use the existing targeted suite:
 
 ## 6. Undo and restore debugging
 
-First classify the command returned by `undo_manager.peek()`.
+First classify the command returned by `undo_manager.peek()` for undo or `undo_manager.peek_redo()` for redo.
 
 ### `EditorUndoCommand`
 
@@ -266,11 +266,11 @@ Inspect:
 - `before` and `after` selected paths;
 - field, checkbox, visible lock, cursor, cover/mixed/modified, result/source/status values;
 - merge key, affected paths, timestamp, and whether a focus/selection change broke merging;
-- optional `SessionPatch` for metadata/locks or source preference/API cache;
+- optional before/after `SessionPatch` values for metadata/locks or source preference/API cache;
 - whether undo recording was suspended while applying the snapshot;
 - whether `_editor_baseline` was recaptured after application.
 
-Editor undo does not restore audio files. It also does not currently cover virtual-album grouping, skip markers, settings, or local file operations.
+Editor undo/redo does not restore audio files. It also does not currently cover virtual-album grouping, skip markers, settings, or local file operations. A newly pushed editor/save command clears the redo branch.
 
 ### `SavedMetadataTransaction`
 
@@ -286,7 +286,7 @@ Inspect:
 - conflict/failure retention for retry;
 - selection/list/session refresh after successes.
 
-A change to an unmanaged custom tag is outside the managed fingerprint and should be preserved rather than treated as a conflict. History is per window and is cleared by directory reload/exit.
+A change to an unmanaged custom tag is outside the managed fingerprint and should be preserved rather than treated as a conflict. A fully restored saved transaction creates a reversed transaction for redo and uses the same fingerprint checks. History is per window and is cleared by directory reload/exit.
 
 ## 7. Async debugging
 
@@ -320,7 +320,7 @@ At one breakpoint/log point, compare:
 - visible lock button and `album_session.locks_data[path]`;
 - `all_files_data[path]`;
 - `selected_files_data[path]` and whether it is the same dict object as loaded data;
-- `_editor_baseline` and `undo_manager.peek()`;
+- `_editor_baseline`, `_selection_metadata_baseline`, `undo_manager.peek()`, and `undo_manager.peek_redo()`;
 - `mb_inputs`, `available_source_results`, `_current_metadata_source`;
 - `api_cache[path]` and `album_source_preferences[_album_source_key(path)]`;
 - `current_cover_data`, `_cover_is_mixed`, `cover_modified_in_batch`;

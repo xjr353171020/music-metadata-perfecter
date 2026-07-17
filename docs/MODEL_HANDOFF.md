@@ -97,7 +97,7 @@ Load plan, services, worker signals, `_finish_save()`, managed snapshots, and re
 
 ### Undo transactions
 
-Load both editor snapshot application and filesystem restore. Preserve strict LIFO, recording suspension, editor-command discard on save, fingerprint conflict checks, partial retry, selection/cursor restoration, and cover interning.
+Load both editor snapshot application and filesystem restore. Preserve LIFO undo/redo movement, redo clearing after a new command, recording suspension, editor-command discard on save, fingerprint conflict checks, partial retry, selection/cursor restoration, and cover interning.
 
 ### Cancellation and stale results
 
@@ -109,7 +109,7 @@ Load selection-derived mixed state, modified flag, exact Apple artwork reuse, CA
 
 ### Local file workflow/configuration
 
-Load `file_workflow.py`, UI confirmation sites, `config.py`, and packaged path branches. Move/delete/cleanup are destructive and not undoable; settings can contain a plaintext secret.
+Load `file_workflow.py`, UI confirmation sites, `config.py`, and packaged path branches. NCM conversion batches Explorer-style file arguments into as few converter processes as the Windows command-line limit permits. Move/delete/cleanup are destructive and not undoable; settings can contain a plaintext secret. Runtime directory values are copied per window even though accepted settings remain persisted defaults.
 
 ## 4. Model task classification
 
