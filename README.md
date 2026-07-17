@@ -64,7 +64,7 @@ py -3.12 -m venv .venv
 
 ## 构建 Windows 发布包
 
-先安装运行与构建依赖，然后调用仓库提供的 PowerShell 脚本。脚本从 `config.APP_VERSION` 读取版本，生成单文件 GUI EXE、仅包含该 EXE 的 ZIP，以及 SHA-256 校验文件。
+先安装运行与构建依赖，然后调用仓库提供的 PowerShell 脚本。脚本从 `config.APP_VERSION` 读取版本，生成单文件 GUI EXE、包含 EXE 与许可证说明的 ZIP，以及 SHA-256 校验文件。
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-build.txt
@@ -80,7 +80,7 @@ Music-Metadata-Perfecter-v<version>-windows-x64.zip
 Music-Metadata-Perfecter-v<version>-SHA256SUMS.txt
 ```
 
-构建会将仓库内的 `Ncm拖一拖.exe` 嵌入应用。不要把 `dist/settings.json`、日志或整个 `dist/` 目录直接打入 Release。
+构建会将仓库内的 `Ncm拖一拖.exe` 嵌入应用，并将 `LICENSE`、`THIRD_PARTY_NOTICES.md` 一同放入 ZIP。不要把 `dist/settings.json`、日志或整个 `dist/` 目录直接打入 Release。
 
 ## 测试
 
@@ -107,4 +107,4 @@ Music-Metadata-Perfecter-v<version>-SHA256SUMS.txt
 
 ## 许可证
 
-仓库目前尚未声明软件许可证。第三方库和随仓库提供的工具仍受各自许可证约束；在复用或再分发前，请先核对相应条款。
+本项目源代码按 [GNU General Public License v3.0 only](LICENSE) 发布。第三方库和随仓库提供的工具仍受各自许可证约束，详见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

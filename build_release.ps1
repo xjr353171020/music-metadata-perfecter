@@ -10,6 +10,8 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ConverterName = "Ncm" + [char]0x62D6 + [char]0x4E00 + [char]0x62D6 + ".exe"
 $ConverterPath = Join-Path $RepoRoot $ConverterName
+$LicensePath = Join-Path $RepoRoot "LICENSE"
+$NoticesPath = Join-Path $RepoRoot "THIRD_PARTY_NOTICES.md"
 $PythonEnv = Split-Path -Parent $PythonPath
 $CondaLibraryBin = Join-Path $PythonEnv "Library\bin"
 $OriginalPath = $env:PATH
@@ -19,6 +21,12 @@ if (-not (Test-Path -LiteralPath $PythonPath -PathType Leaf)) {
 }
 if (-not (Test-Path -LiteralPath $ConverterPath -PathType Leaf)) {
     throw "Bundled NCM converter not found: $ConverterPath"
+}
+if (-not (Test-Path -LiteralPath $LicensePath -PathType Leaf)) {
+    throw "Project license not found: $LicensePath"
+}
+if (-not (Test-Path -LiteralPath $NoticesPath -PathType Leaf)) {
+    throw "Third-party notices not found: $NoticesPath"
 }
 
 Push-Location $RepoRoot
@@ -53,7 +61,11 @@ try {
         throw "Expected executable was not created: $ExePath"
     }
 
-    Compress-Archive -LiteralPath $ExePath -DestinationPath $ZipPath -CompressionLevel Optimal -Force
+    Compress-Archive `
+        -LiteralPath @($ExePath, $LicensePath, $NoticesPath) `
+        -DestinationPath $ZipPath `
+        -CompressionLevel Optimal `
+        -Force
     $HashLines = @($ExePath, $ZipPath) | ForEach-Object {
         $Hash = Get-FileHash -LiteralPath $_ -Algorithm SHA256
         "{0}  {1}" -f $Hash.Hash.ToLowerInvariant(), (Split-Path $_ -Leaf)

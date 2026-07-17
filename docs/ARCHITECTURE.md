@@ -389,7 +389,7 @@ Cover changes are editor-undoable, and saved cover state participates in filesys
 
 These helpers currently run synchronously under a wait cursor, so large operations can block the UI. Return success generally means the workflow ran, not that every individual conversion/move succeeded; individual failures are printed and counts can be lower than discovered files.
 
-`config.py` checks `sys.frozen` and uses the executable directory for packaged settings. `build_release.ps1` is the reproducible Windows packaging entry point: it requires an explicit Python interpreter, reads `config.APP_VERSION`, builds a one-file/no-console PyInstaller executable with the NCM converter embedded, creates an EXE-only ZIP, and writes SHA-256 checksums. Generated `build/`, `dist/`, and `.spec` files remain ignored.
+`config.py` checks `sys.frozen` and uses the executable directory for packaged settings. `build_release.ps1` is the reproducible Windows packaging entry point: it requires an explicit Python interpreter, reads `config.APP_VERSION`, builds a one-file/no-console PyInstaller executable with the NCM converter embedded, creates a ZIP containing the EXE and license notices, and writes SHA-256 checksums. Generated `build/`, `dist/`, and `.spec` files remain ignored.
 
 ## 15. Caches and identity
 
