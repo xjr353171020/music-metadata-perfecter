@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import os
 import sys
-from config import APP_DIR, APP_NAME, APP_SETTINGS, APP_VERSION
+from config import APP_DIR, APP_ICON_PATH, APP_NAME, APP_SETTINGS, APP_VERSION
 from startup_logging import configure_console_transcript
 
 def main():
@@ -13,6 +13,7 @@ def main():
     os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
     os.environ["QT_SCALE_FACTOR_ROUNDING_POLICY"] = "PassThrough"
 
+    from PyQt6.QtGui import QIcon
     from PyQt6.QtWidgets import QApplication
 
     from main_window import MusicEditorWindow
@@ -21,6 +22,7 @@ def main():
     init_mb_api()
 
     app = QApplication(sys.argv)
+    app.setWindowIcon(QIcon(APP_ICON_PATH))
     
     # 【终极防线】：使用 StyleSheet 全局覆盖所有可能发生隐式调用的控件字体
     # 这样就算某个阴暗角落的组件获取不到 pointSize，CSS 也会强制赋予它 10pt (约 13px)

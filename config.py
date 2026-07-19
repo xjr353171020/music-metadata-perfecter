@@ -13,9 +13,16 @@ def get_application_path():
         # 如果是 python 脚本运行，返回当前脚本所在目录
         return os.path.dirname(os.path.abspath(__file__))
 
+
+def get_bundled_resource_path(*parts):
+    """Resolve a read-only resource in source and PyInstaller builds."""
+    base_path = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base_path, *parts)
+
 # 现在的路径全基于真实运行目录计算
 APP_DIR = get_application_path()
 SETTINGS_FILE = os.path.join(APP_DIR, "settings.json")
+APP_ICON_PATH = get_bundled_resource_path("assets", "app_icon.png")
 
 DEFAULT_SETTINGS = {
     "VIP_DOWNLOAD_DIR": r"E:\CloudMusic\VipSongsDownload",
@@ -39,7 +46,7 @@ def save_settings(settings):
 APP_SETTINGS = load_settings()
 
 APP_NAME = "Music Metadata Perfecter"
-APP_VERSION = "2026.07.17.1"
+APP_VERSION = "2026.07.19.1"
 USER_AGENT_APP = "MyMusicOrganizer"
 USER_AGENT_VERSION = "6.0"
 USER_AGENT_CONTACT = "xjr353171020@126.com"

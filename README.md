@@ -1,5 +1,7 @@
 # Music Metadata Perfecter
 
+<img src="assets/app_icon.png" alt="Music Metadata Perfecter icon" width="160">
+
 面向 Windows 的本地 MP3 / FLAC 元数据编辑器。它使用 PyQt6 提供中文桌面界面，可在同一工作流中整理本地标签、比较 MusicBrainz 与 Apple Music / iTunes 元数据、选择封面，并在保存后撤销或重做文件修改。
 
 > 本项目会直接修改音频文件。正式整理曲库前，请先用少量副本熟悉保存、专辑同步和撤销行为，并保留独立备份。

@@ -27,6 +27,7 @@ main.py
   -> init_mb_api()                         # currently a no-op
   -> set Qt high-DPI environment variables
   -> QApplication(sys.argv)
+  -> apply bundled application icon
   -> install global Microsoft YaHei/Segoe UI stylesheet
   -> APP_SETTINGS["MAIN_MUSIC_DIR"] or fallback
   -> MusicEditorWindow(music_dir)
@@ -44,7 +45,9 @@ main.py
 
 There is no command-line configuration parser, dependency bootstrap, settings schema validation, or database initialization. If the configured directory does not exist, `load_file_list()` returns without starting a loader. An additional window creates a completely new `MusicEditorWindow`, session, and runtime settings copy. Saving settings still updates the process-global persisted defaults and Provider configuration, but already-open windows keep their own workflow/music-directory values. Provider caches remain process-global.
 
-`APP_NAME` is the single user-facing product name used by window titles, startup logs, and the machine-local shortcut. `APP_VERSION` is the single release/log version source. Each behavior-changing iteration updates that constant once; log producers consume it rather than maintaining independent versions. The `v` marker belongs to filenames and display headers, while the configured value itself is currently shaped like `2026.07.17.1`.
+`APP_NAME` is the single user-facing product name used by window titles, startup logs, and the machine-local shortcut. `APP_VERSION` is the single release/log version source. Each behavior-changing iteration updates that constant once; log producers consume it rather than maintaining independent versions. The `v` marker belongs to filenames and display headers, while the configured value itself is currently shaped like `2026.07.19.1`.
+
+Application icon resources live in `assets/app_icon.png` and `assets/app_icon.ico`. `config.APP_ICON_PATH` resolves the PNG from the source tree or PyInstaller's temporary bundle directory. `main.py` applies it to the `QApplication`, while `build_release.ps1` uses the ICO for the Windows executable and embeds the PNG for runtime use.
 
 For development without VS Code, the supported machine-local entry point is the `Music Metadata Perfecter` Windows desktop shortcut discoverable by searching `meta` in Listary. Its target is the absolute interpreter configured in `.vscode/settings.json`, its argument is the absolute repository `main.py`, and its working directory is the repository root. The shortcut is outside the repository and is not a portable configuration artifact. It does not need to change for normal iterations while those two paths remain stable. Startup through this shortcut follows the same `main.py` path and writes the same runtime log, so diagnostics do not depend on a visible console.
 

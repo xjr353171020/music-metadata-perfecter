@@ -12,6 +12,8 @@ $ConverterName = "Ncm" + [char]0x62D6 + [char]0x4E00 + [char]0x62D6 + ".exe"
 $ConverterPath = Join-Path $RepoRoot $ConverterName
 $LicensePath = Join-Path $RepoRoot "LICENSE"
 $NoticesPath = Join-Path $RepoRoot "THIRD_PARTY_NOTICES.md"
+$IconPngPath = Join-Path $RepoRoot "assets\app_icon.png"
+$IconIcoPath = Join-Path $RepoRoot "assets\app_icon.ico"
 $PythonEnv = Split-Path -Parent $PythonPath
 $CondaLibraryBin = Join-Path $PythonEnv "Library\bin"
 $OriginalPath = $env:PATH
@@ -27,6 +29,12 @@ if (-not (Test-Path -LiteralPath $LicensePath -PathType Leaf)) {
 }
 if (-not (Test-Path -LiteralPath $NoticesPath -PathType Leaf)) {
     throw "Third-party notices not found: $NoticesPath"
+}
+if (-not (Test-Path -LiteralPath $IconPngPath -PathType Leaf)) {
+    throw "Application PNG icon not found: $IconPngPath"
+}
+if (-not (Test-Path -LiteralPath $IconIcoPath -PathType Leaf)) {
+    throw "Application ICO icon not found: $IconIcoPath"
 }
 
 Push-Location $RepoRoot
@@ -47,7 +55,9 @@ try {
         --onefile `
         --noconsole `
         --name $ArtifactName `
+        --icon $IconIcoPath `
         --add-data "$ConverterPath;." `
+        --add-data "$IconPngPath;assets" `
         --collect-data pykakasi `
         main.py
     if ($LASTEXITCODE -ne 0) {
