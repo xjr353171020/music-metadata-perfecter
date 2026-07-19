@@ -37,7 +37,9 @@ main.py
   -> start_initial_load()
        -> QTimer.singleShot(0, load_file_list)
        -> FileLoaderWorker(music_dir)
+       -> up to four stable reader partitions
        -> AudioTagger.read_tags() per top-level MP3/FLAC
+       -> FileLoadProgressDialog lane per active reader thread
        -> on_load_finished(sortable, all_files_data)
        -> populate list and establish editor baseline
   -> QApplication.exec()
@@ -140,7 +142,7 @@ Parallel-source risks:
 
 | Stage | Owner | Input -> output / transformation | Error, cancellation, and source of truth |
 | --- | --- | --- | --- |
-| Local scan | `FileLoaderWorker` | configured directory -> top-level MP3/FLAC paths | Per-file exceptions are swallowed; no cancellation/generation; filesystem is source |
+| Local scan | `FileLoaderWorker` | configured directory -> top-level MP3/FLAC paths -> up to four round-robin reader partitions | One `ThreadPoolExecutor` task owns each active partition; per-file exceptions are swallowed; no cancellation/generation; filesystem is source |
 | Tag read | `AudioTagger.read_tags()` | ID3/Vorbis/Picture tags -> normalized metadata dict | Returns empty defaults and prints format read errors; file is source |
 | Loaded state | `on_load_finished()` / `AlbumSession` | worker dict -> `all_files_data`, sortable list | UI thread; in-memory dict becomes current window truth |
 | Selection | `MusicEditorWindow` | selected paths -> `selected_files_data`, mixed/single combo values, cover state | Reads file directly only if path absent from loaded state; selection view is derived |

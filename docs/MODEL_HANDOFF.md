@@ -15,7 +15,7 @@ Verified separations:
 - `undo_manager.py` represents editor snapshots, session patches, managed snapshots, saved transactions, and history limits separately from Qt application.
 - MusicBrainz, Apple Music/iTunes, combined source comparison, and artist-name selection have distinct modules.
 - cooperative search cancellation is shared through `search_cancellation.py`.
-- directory scan, metadata fetch, save, restore, and cover download have dedicated workers.
+- directory scan, metadata fetch, save, restore, and cover download have dedicated workers. `FileLoaderWorker` uses up to four stable reader partitions, and `FileLoadProgressDialog` renders one progress lane for each active partition.
 - cover gallery, library/touch widgets, dialogs, album initials, and audio preview are extracted reusable UI units.
 - `config.APP_NAME` is the single product name used by window titles, startup logs, and the `Music Metadata Perfecter` desktop shortcut. `config.APP_VERSION` is the single release/log identifier; runtime, metadata-search, and cover-search logs use it consistently.
 - `main.py` captures stdout/stderr and uncaught exception tracebacks in a versioned daily runtime log, including when launched from the machine-local desktop/Listary shortcut.

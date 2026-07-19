@@ -5,6 +5,7 @@ import glob
 import json
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
@@ -85,12 +86,18 @@ class FetchWorker(QThread):
 class FileLoaderWorker(QThread):
     """Read local audio tags and produce the list's stable sort order."""
 
-    progress_sig = pyqtSignal(int, int, str)
+    DEFAULT_WORKER_COUNT = 4
+
+    configured_sig = pyqtSignal(int)
+    progress_sig = pyqtSignal(int, int, int, int, int, str)
     finished_sig = pyqtSignal(list, dict)
 
-    def __init__(self, music_dir):
+    def __init__(self, music_dir, worker_count=DEFAULT_WORKER_COUNT):
         super().__init__()
         self.music_dir = music_dir
+        self.worker_count = max(1, int(worker_count))
+        self._progress_lock = threading.Lock()
+        self._completed_count = 0
 
     def run(self):
         files = glob.glob(os.path.join(self.music_dir, "*.mp3"))
@@ -99,24 +106,68 @@ class FileLoaderWorker(QThread):
         all_files_data = {}
         sortable = []
 
+        active_worker_count = min(self.worker_count, total)
+        self.configured_sig.emit(active_worker_count)
+        partitions = [[] for _ in range(active_worker_count)]
         for index, file_path in enumerate(files):
+            partitions[index % active_worker_count].append(file_path)
+
+        active_partitions = [
+            (slot, paths) for slot, paths in enumerate(partitions) if paths
+        ]
+        self._completed_count = 0
+        start_barrier = threading.Barrier(len(active_partitions)) if active_partitions else None
+        with ThreadPoolExecutor(
+            max_workers=self.worker_count,
+            thread_name_prefix="metadata-loader",
+        ) as executor:
+            futures = [
+                executor.submit(
+                    self._load_partition, slot, paths, total, start_barrier
+                )
+                for slot, paths in active_partitions
+            ]
+            for future in futures:
+                partition_data, partition_sortable = future.result()
+                all_files_data.update(partition_data)
+                sortable.extend(partition_sortable)
+
+        sortable.sort(key=lambda item: item[0])
+        self.finished_sig.emit(sortable, all_files_data)
+
+    def _load_partition(self, slot, paths, total, start_barrier):
+        partition_data = {}
+        partition_sortable = []
+        if start_barrier is not None:
+            start_barrier.wait()
+
+        partition_total = len(paths)
+        for current, file_path in enumerate(paths, start=1):
             try:
                 data = AudioTagger(file_path).read_tags()
-                all_files_data[file_path] = data
+                partition_data[file_path] = data
                 disc_num = self._tag_number(data.get("disc", ""))
                 track_num = self._tag_number(data.get("track", ""))
-                sortable.append((
+                partition_sortable.append((
                     (data.get("album", ""), disc_num, track_num, os.path.basename(file_path)),
                     file_path,
                 ))
             except Exception:
                 pass
 
-            if index % 5 == 0 or index == total - 1:
-                self.progress_sig.emit(index + 1, total, os.path.basename(file_path))
+            with self._progress_lock:
+                self._completed_count += 1
+                completed = self._completed_count
+            self.progress_sig.emit(
+                slot,
+                current,
+                partition_total,
+                completed,
+                total,
+                os.path.basename(file_path),
+            )
 
-        sortable.sort(key=lambda item: item[0])
-        self.finished_sig.emit(sortable, all_files_data)
+        return partition_data, partition_sortable
 
     @staticmethod
     def _tag_number(value):

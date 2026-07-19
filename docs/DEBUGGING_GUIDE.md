@@ -309,6 +309,7 @@ Worker checklist:
 13. Verify close behavior: cancel-and-ignore for search; block for save/restore.
 14. For cover requests, inspect four-attempt transient retry and cancelable backoff.
 15. For loaders, note there is no cancellation or generation guard; investigate overlapping reloads explicitly.
+16. The loader uses up to four stable reader partitions. Confirm that the dialog creates one progress lane per active partition, not per file, and that every lane reaches its own partition total.
 
 Relevant existing tests are in `test_application_undo_and_cancel.py`. They cover cooperative fetch/cover cancellation, Escape priority, stale metadata completion, and worker-adjacent UI behavior. They do not prove live HTTP cancellation or stale loader handling.
 

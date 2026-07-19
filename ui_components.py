@@ -2,10 +2,11 @@
 import os
 import json
 from datetime import datetime
-from PyQt6.QtWidgets import (QWidget, QDialog, QVBoxLayout, QHBoxLayout, 
+from PyQt6.QtWidgets import (QWidget, QDialog, QVBoxLayout, QHBoxLayout, QGridLayout,
                              QPushButton, QLineEdit, QFormLayout, QTextEdit, 
                              QFileDialog, QLabel, QMessageBox, QListWidget,
-                             QListWidgetItem, QScroller, QSplitter, QStackedWidget)
+                             QListWidgetItem, QProgressBar, QScrollArea, QScroller,
+                             QSplitter, QStackedWidget)
 from PyQt6.QtGui import QPainter, QColor
 from PyQt6.QtCore import Qt, QTimer
 
@@ -55,6 +56,87 @@ class LoadingOverlay(QWidget):
 
     def stop(self):
         self.timer.stop(); self.hide()
+
+
+class FileLoadProgressDialog(QDialog):
+    """Display one determinate progress lane for each metadata reader thread."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("数据加载中")
+        self.setWindowModality(Qt.WindowModality.WindowModal)
+        self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False)
+        self.setFixedSize(640, 180)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(12)
+        self.summary_label = QLabel("正在启动多线程元数据读取...")
+        self.summary_label.setStyleSheet("font-weight: bold;")
+        layout.addWidget(self.summary_label)
+
+        lane_container = QWidget()
+        self.progress_grid = QGridLayout(lane_container)
+        self.progress_grid.setHorizontalSpacing(10)
+        self.progress_grid.setVerticalSpacing(10)
+        self.progress_grid.setColumnStretch(1, 1)
+        lane_scroll = QScrollArea()
+        lane_scroll.setWidgetResizable(True)
+        lane_scroll.setStyleSheet("QScrollArea { border: none; }")
+        lane_scroll.setWidget(lane_container)
+        self.progress_bars = []
+        self.file_labels = []
+        layout.addWidget(lane_scroll)
+
+    def configure_worker_count(self, worker_count):
+        previous_count = len(self.progress_bars)
+        while len(self.progress_bars) < worker_count:
+            slot = len(self.progress_bars)
+            thread_label = QLabel(f"线程 {slot + 1}")
+            progress_bar = QProgressBar()
+            progress_bar.setRange(0, 0)
+            progress_bar.setFixedHeight(22)
+            progress_bar.setMinimumWidth(320)
+            progress_bar.setTextVisible(True)
+            file_label = QLabel("等待任务")
+            file_label.setMinimumWidth(160)
+
+            self.progress_grid.addWidget(thread_label, slot, 0)
+            self.progress_grid.addWidget(progress_bar, slot, 1)
+            self.progress_grid.addWidget(file_label, slot, 2)
+            self.progress_bars.append(progress_bar)
+            self.file_labels.append(file_label)
+        if len(self.progress_bars) > previous_count:
+            self.summary_label.setText(
+                f"正在启动 {worker_count} 个元数据读取线程..."
+            )
+            self.setFixedHeight(min(680, 110 + worker_count * 42))
+
+    def update_thread_progress(
+        self, slot, current, lane_total, completed, total, filename
+    ):
+        if slot < 0:
+            return
+        self.configure_worker_count(slot + 1)
+        self.summary_label.setText(
+            f"正在并行读取音频元数据：总进度 {completed}/{total}"
+        )
+        progress_bar = self.progress_bars[slot]
+        progress_bar.setRange(0, lane_total)
+        progress_bar.setValue(current)
+        progress_bar.setFormat(f"{current}/{lane_total}")
+
+        file_label = self.file_labels[slot]
+        available_width = max(80, file_label.width() - 8)
+        file_label.setText(
+            file_label.fontMetrics().elidedText(
+                filename, Qt.TextElideMode.ElideMiddle, available_width
+            )
+        )
+        file_label.setToolTip(filename)
+
+    def reject(self):
+        pass
 
 class SettingsDialog(QDialog):
     def __init__(self, parent=None, settings=None):

@@ -28,7 +28,7 @@ from config import APP_NAME, APP_SETTINGS, save_settings
 from file_workflow import convert_ncm_files, delete_ncm_files, list_ncm_files, move_audio_files, clean_lrc_files
 from metadata_save_service import MetadataRestoreService, MetadataSaveService
 from save_plan import SavePlanRequest, build_save_plan
-from ui_components import LoadingOverlay, SettingsDialog, DebugDialog
+from ui_components import FileLoadProgressDialog, LoadingOverlay, SettingsDialog, DebugDialog
 from background_workers import FetchWorker, FileLoaderWorker, RestoreWorker, SaveWorker
 from cover_gallery import CoverGalleryDialog
 from cover_fetch_worker import CoverFetchWorker
@@ -2338,20 +2338,15 @@ class MusicEditorWindow(QMainWindow):
         
         if not os.path.exists(self.music_dir): return
         
-        self.progress_dialog = QProgressDialog("正在高速扫描硬盘曲库...", None, 0, 100, self)
-        self.progress_dialog.setWindowTitle("数据加载中")
-        self.progress_dialog.setWindowModality(Qt.WindowModality.WindowModal)
-        self.progress_dialog.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, False) 
-        self.progress_dialog.setMinimumDuration(0)
-        self.progress_dialog.setFixedSize(450, 150)
-        self.progress_dialog.setValue(0)
+        self.progress_dialog = FileLoadProgressDialog(self)
         self.progress_dialog.show()
         self._center_loading_progress_dialog()
-        # QProgressDialog may apply its own first-show placement after show().
+        # The platform may apply its own first-show placement after show().
         QTimer.singleShot(0, self._center_loading_progress_dialog)
         QTimer.singleShot(100, self._center_loading_progress_dialog)
         
         self.loader_worker = FileLoaderWorker(self.music_dir)
+        self.loader_worker.configured_sig.connect(self.configure_load_workers)
         self.loader_worker.progress_sig.connect(self.update_load_progress)
         self.loader_worker.finished_sig.connect(self.on_load_finished)
         self.loader_worker.start()
@@ -2367,13 +2362,16 @@ class MusicEditorWindow(QMainWindow):
             parent_frame.y() + (parent_frame.height() - dialog_frame.height()) // 2,
         )
 
-    def update_load_progress(self, current, total, filename):
-        if total > 0:
-            self.progress_dialog.setMaximum(total)
-            self.progress_dialog.setValue(current)
-            fm = self.progress_dialog.fontMetrics()
-            elided_filename = fm.elidedText(filename, Qt.TextElideMode.ElideMiddle, 380)
-            self.progress_dialog.setLabelText(f"正在读取并解析音频元数据 ({current}/{total}):\n{elided_filename}")
+    def configure_load_workers(self, worker_count):
+        self.progress_dialog.configure_worker_count(worker_count)
+        self._center_loading_progress_dialog()
+
+    def update_load_progress(
+        self, slot, current, lane_total, completed, total, filename
+    ):
+        self.progress_dialog.update_thread_progress(
+            slot, current, lane_total, completed, total, filename
+        )
 
     def on_load_finished(self, sortable, all_files_data):
         self.album_session.all_files_data = all_files_data
@@ -2382,7 +2380,7 @@ class MusicEditorWindow(QMainWindow):
         self._editor_baseline = self._capture_editor_state()
         
         if hasattr(self, 'progress_dialog'):
-            self.progress_dialog.close()
+            self.progress_dialog.accept()
 
     def get_real_filename(self, item):
         return item.data(Qt.ItemDataRole.UserRole)
