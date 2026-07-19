@@ -111,6 +111,18 @@ class WindowInteractionTests(unittest.TestCase):
         event = QKeyEvent(event_type, key, modifiers, "", autorepeat)
         QApplication.sendEvent(self.window, event)
 
+    def test_reload_library_button_calls_existing_load_entrypoint(self):
+        with patch.object(MusicEditorWindow, "load_file_list") as load_file_list:
+            window = MusicEditorWindow(os.getcwd())
+            try:
+                self.assertEqual(window.btn_reload_library.text(), "🔄 重新读取音乐目录")
+                window.btn_reload_library.click()
+                load_file_list.assert_called_once_with(False)
+            finally:
+                window.close()
+                window.deleteLater()
+                self.app.processEvents()
+
     def test_save_busy_state_blocks_repeated_and_modified_enter(self):
         actions = []
         self.window.skip_current_files = lambda: actions.append("skip")

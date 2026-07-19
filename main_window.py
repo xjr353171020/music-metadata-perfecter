@@ -225,6 +225,7 @@ class MusicEditorWindow(QMainWindow):
         
         workflow_btn_style = "padding: 10px; font-size: 10pt; font-weight: bold; border-radius: 4px; border: 1px solid #bdc3c7; background-color: #f8f9fa;"
         btn_settings = QPushButton("⚙️ 设置工作目录"); btn_settings.setStyleSheet(workflow_btn_style); btn_settings.clicked.connect(self.open_settings)
+        self.btn_reload_library = QPushButton("🔄 重新读取音乐目录"); self.btn_reload_library.setStyleSheet(workflow_btn_style); self.btn_reload_library.clicked.connect(self.load_file_list)
         btn_convert = QPushButton("🔄 1. 解密 NCM"); btn_convert.setStyleSheet(workflow_btn_style); btn_convert.clicked.connect(self.run_convert)
         btn_move = QPushButton("🚚 2. 移动至曲库"); btn_move.setStyleSheet(workflow_btn_style); btn_move.clicked.connect(self.run_move)
         btn_delete_ncm = QPushButton("🗑️ 删除 NCM"); btn_delete_ncm.setStyleSheet("padding: 10px; font-weight: bold; border-radius: 4px; border: 1px solid #e74c3c; background-color: #fdfbfb; color: #c0392b;"); btn_delete_ncm.clicked.connect(self.confirm_delete_ncm)
@@ -234,7 +235,7 @@ class MusicEditorWindow(QMainWindow):
         
         ops_layout = QHBoxLayout(); ops_layout.addWidget(btn_convert); ops_layout.addWidget(btn_move)
         secondary_ops_layout = QHBoxLayout(); secondary_ops_layout.addWidget(btn_new_window); secondary_ops_layout.addWidget(btn_delete_ncm)
-        tools_layout.addWidget(btn_settings); tools_layout.addLayout(ops_layout); tools_layout.addLayout(secondary_ops_layout); tools_layout.addWidget(btn_clean_lrc)
+        tools_layout.addWidget(btn_settings); tools_layout.addWidget(self.btn_reload_library); tools_layout.addLayout(ops_layout); tools_layout.addLayout(secondary_ops_layout); tools_layout.addWidget(btn_clean_lrc)
         workflow_section_layout.addWidget(self.workflow_content)
         self.workflow_animation = QPropertyAnimation(self.workflow_content, b"maximumHeight", self)
         self.workflow_animation.setDuration(160)
