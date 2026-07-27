@@ -8,6 +8,10 @@ This context covers user-guided repair and completion of embedded metadata for l
 Information sufficient to search for or disambiguate a track's identity, whether already embedded or supplied by the user.
 _Avoid_: Metadata, hint
 
+**Filename clue draft**:
+An unverified, structured interpretation of identity clues present in a filename. It may separate or rearrange filename evidence but does not add facts absent from that filename.
+_Avoid_: Candidate metadata, generated metadata, identified track
+
 **Untagged track**:
 A local audio track with none of the managed metadata fields populated. It can still have an identity clue outside its embedded tags.
 _Avoid_: Unknown track, unidentified track
