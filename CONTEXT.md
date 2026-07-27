@@ -9,7 +9,7 @@ Information sufficient to search for or disambiguate a track's identity, whether
 _Avoid_: Metadata, hint
 
 **Filename clue draft**:
-An unverified, structured interpretation of identity clues present in a filename. It may separate or rearrange filename evidence but does not add facts absent from that filename.
+An unverified, structured interpretation of identity clues present in a filename. It may separate or rearrange filename evidence but adds no absent facts and remains weaker evidence than non-empty loaded metadata.
 _Avoid_: Candidate metadata, generated metadata, identified track
 
 **Untagged track**:
