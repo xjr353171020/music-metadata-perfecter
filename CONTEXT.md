@@ -24,6 +24,14 @@ _Avoid_: Untagged track
 The user-guided correction or completion of embedded track metadata using identity clues and candidate metadata.
 _Avoid_: Automatic identification, blind tagging
 
+**Loaded metadata**:
+The embedded metadata most recently read from a local track. It is the persisted baseline against which unsaved edits can be distinguished.
+_Avoid_: Original information, editor draft
+
+**Editor draft**:
+The current mutable metadata values presented for review, search, and eventual saving. It can differ from loaded metadata and is not persisted until the user saves it.
+_Avoid_: Original information, loaded metadata
+
 **Candidate metadata**:
 A proposed set of values from an external reference source that is not authoritative until the user accepts it.
 _Avoid_: Source of truth, detected metadata
