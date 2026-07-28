@@ -64,6 +64,8 @@ Filename clue analysis follows this boundary: the worker owns only basename, Key
 
 `library_widgets.py`, `cover_gallery.py`, `audio_player_widget.py`, `album_initials.py`, and dialogs are appropriately narrow. Styling/interaction fixes can usually remain local if they do not change metadata behavior.
 
+The fixed amber pending-field dots are non-interactive labels owned by the window. Their state is derived from the checked Editor draft value and selected Loaded metadata under direct primary-save semantics; `<保留>` and unchecked fields stay off, `<留白>` means empty, locks are ignored, and dependent synchronization is out of scope. They are not stored in `EditorStateSnapshot`.
+
 ### Version and diagnostics boundary
 
 `config.APP_VERSION` is authoritative. A behavior-changing iteration bumps only this value; log filenames and headers derive from it. Do not add a second version constant to `main.py`, dialogs, workers, or Provider adapters.

@@ -92,7 +92,7 @@ Widget-local/presentation state includes:
 
 - editable combo values, checkboxes, lock buttons, cursor/selection positions;
 - result-panel line edits and selected Provider button;
-- filename-clue action availability and its compact source/no-result text;
+- filename-clue action availability, its compact source/no-result text, and fixed pending-field indicators;
 - list/header items, hidden search rows, scroll animation, and status markers;
 - `current_cover_data`, mixed/modified flags, overlay/progress state;
 - audio-player media state.
@@ -120,6 +120,7 @@ Remaining coupling in `main_window.py` is real rather than merely line-count rel
 | `album_sync_keys` | `AlbumSession` | Per session; defaults to album, album artist, date, genre | Save-plan configuration; preserved by `reset_for_file_load()` |
 | `last_selected_album` | `AlbumSession` | Selection lifetime | Derived marker for auto-clearing manually supplied IDs |
 | `inputs` / `checkboxes` | Window widgets | Current selection/edit | Authoritative pending unsaved text and elected fields |
+| `pending_field_indicators` | Window widgets | Current selection/edit | Derived direct-save difference display; reads `inputs`, checkboxes, and selected Loaded metadata, and never enters a save plan or undo snapshot |
 | visible lock buttons | Window widgets | Current selection | Mirror of the first selected path; toggling applies to all selected paths |
 | `_editor_baseline` | Window | Replaced after selection/action | Mirrored last captured widget snapshot used to form undo commands |
 | `_selection_metadata_baseline` | Window | Replaced after selection/save/restore | Text/cover baseline used to warn before abandoning unsaved metadata edits |
@@ -167,6 +168,8 @@ Parallel-source risks:
 | Restore/redo | `RestoreWorker` + `MetadataRestoreService` | saved changes or their reversed snapshots -> conflict-checked exact managed restore -> read-back | Current fingerprint must equal recorded `after`; partial operations remain retryable in their current undo/redo stack |
 
 MusicBrainz and Apple run sequentially inside one fetch worker. A successful search never writes local tags automatically. Source switching selects a complete normalized result, after which the user may apply individual fields or all eligible fields.
+
+Each local metadata row reserves a fixed 14 x 32 hover target containing an 8 x 8 amber circle. The circle is derived from direct primary-save semantics: it lights only when the field is checked, is not `<保留>`, and its concrete value (`<留白>` means empty) differs from at least one selected Loaded metadata value. Locks do not suppress it, and dependent album synchronization is intentionally not previewed. The tooltip shows the one Loaded metadata value, `（空）`, or `多个不同值`. Selection, editor text, checkbox changes, save/restore read-back, and directory reload refresh this derived presentation.
 
 ### Versioned diagnostics
 
@@ -452,6 +455,7 @@ These helpers currently run synchronously under a wait cursor, so large operatio
 21. DeepSeek may select only an existing candidate and secrets never enter debug logs.
 22. Directory reload resets per-window state/history; saved undo is not durable.
 23. Filename-clue provenance never supplies search or save metadata; only the existing editor inputs do.
+24. Pending-field indicators are non-interactive derived presentation and never alter direct-save, lock, synchronization, or undo behavior.
 
 ## 17. Known risks and technical debt
 

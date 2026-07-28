@@ -331,6 +331,7 @@ Relevant existing tests are in `test_application_undo_and_cancel.py`, `test_file
 At one breakpoint/log point, compare:
 
 - `inputs[field].currentText()` and checkbox state;
+- `pending_field_indicators[field].property("pending")` and its Loaded metadata tooltip;
 - visible lock button and `album_session.locks_data[path]`;
 - `all_files_data[path]`;
 - `selected_files_data[path]` and whether it is the same dict object as loaded data;
@@ -355,6 +356,8 @@ Expected synchronization points:
 Temporary divergence is expected between unsaved widgets and loaded metadata. Divergence after a successful read-back or restored selection is not expected and should be fixed at that synchronization boundary.
 
 Provider searches intentionally build title, first artist, album, track, and disc arguments from `inputs`. Existing candidate red/green comparison also reads those current editor values and refreshes as they change. By contrast, `FetchWorker.local_metadata` is the Loaded metadata snapshot included only in raw debug output; do not substitute it for either query or comparison input.
+
+For a pending-field indicator, translate `<留白>` to empty, treat `<保留>` or an unchecked field as no direct write, and compare the remaining concrete editor value with every selected `selected_files_data[path][field]`. At least one difference lights the dot. Do not include locks or dependent album-sync targets in this calculation.
 
 ## 9. Reproduction fixtures
 

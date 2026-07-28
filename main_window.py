@@ -142,6 +142,7 @@ class MusicEditorWindow(QMainWindow):
         self.checkboxes = {}
         self.inputs = {}
         self.lock_btns = {}  
+        self.pending_field_indicators = {}
         self.mb_inputs = {} 
         self.mb_apply_btns = {} 
         self.mb_labels = {}
@@ -152,6 +153,7 @@ class MusicEditorWindow(QMainWindow):
         self._search_restore_timer.setInterval(40)
         self._search_restore_timer.timeout.connect(self.restore_full_list)
         self._connect_undo_capture()
+        self._refresh_pending_field_indicators()
         self._refresh_filename_clue_action()
         self._editor_baseline = self._capture_editor_state()
         QApplication.instance().installEventFilter(self)
@@ -596,6 +598,35 @@ class MusicEditorWindow(QMainWindow):
                 input_container.addWidget(warn)
                 
             row_layout.addLayout(input_container, stretch=1)
+
+            pending_indicator = QLabel("")
+            pending_indicator.setObjectName(f"pending_field_indicator_{key}")
+            pending_indicator.setFixedSize(14, 32)
+            pending_indicator.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            pending_indicator.setTextInteractionFlags(
+                Qt.TextInteractionFlag.NoTextInteraction
+            )
+            pending_indicator.setCursor(Qt.CursorShape.ArrowCursor)
+            pending_indicator.setProperty("pending", False)
+            pending_indicator.setToolTip("Loaded metadata：未选择曲目")
+            pending_indicator.setStyleSheet(
+                "QLabel { background: transparent; border: none; }"
+            )
+            pending_dot = QFrame(pending_indicator)
+            pending_dot.setObjectName(f"pending_field_dot_{key}")
+            pending_dot.setFixedSize(8, 8)
+            pending_dot.move(3, 12)
+            pending_dot.setAttribute(
+                Qt.WidgetAttribute.WA_TransparentForMouseEvents,
+                True,
+            )
+            pending_dot.setStyleSheet(
+                "QFrame { background-color: transparent; border: none; "
+                "border-radius: 4px; }"
+            )
+            pending_indicator._pending_dot = pending_dot
+            self.pending_field_indicators[key] = pending_indicator
+            row_layout.addWidget(pending_indicator)
             
             right_col = QWidget()
             right_col.setFixedWidth(70)
@@ -1815,6 +1846,11 @@ class MusicEditorWindow(QMainWindow):
                     field
                 )
             )
+            combo.currentTextChanged.connect(
+                lambda _text, field=key: self._refresh_pending_field_indicator(
+                    field
+                )
+            )
             combo.lineEdit().textEdited.connect(
                 lambda _text, field=key: self._record_user_editor_change(
                     f"撤销{field}编辑",
@@ -1833,6 +1869,50 @@ class MusicEditorWindow(QMainWindow):
                     f"撤销{field}勾选修改"
                 )
             )
+            self.checkboxes[key].toggled.connect(
+                lambda _checked, field=key: self._refresh_pending_field_indicator(
+                    field
+                )
+            )
+
+    def _refresh_pending_field_indicator(self, key):
+        indicator = self.pending_field_indicators.get(key)
+        if indicator is None:
+            return
+
+        loaded_values = [
+            str(data.get(key, "") or "")
+            for data in self.album_session.selected_files_data.values()
+        ]
+        if not loaded_values:
+            tooltip_value = "未选择曲目"
+        elif len(set(loaded_values)) > 1:
+            tooltip_value = "多个不同值"
+        else:
+            tooltip_value = loaded_values[0] or "（空）"
+        indicator.setToolTip(f"Loaded metadata：{tooltip_value}")
+
+        editor_value = self.inputs[key].currentText()
+        if editor_value == "<留白>":
+            direct_value = ""
+        else:
+            direct_value = editor_value
+        pending = (
+            bool(loaded_values)
+            and self.checkboxes[key].isChecked()
+            and editor_value != "<保留>"
+            and any(value != direct_value for value in loaded_values)
+        )
+        indicator.setProperty("pending", pending)
+        background = "#d68910" if pending else "transparent"
+        indicator._pending_dot.setStyleSheet(
+            f"QFrame {{ background-color: {background}; border: none; "
+            "border-radius: 4px; }"
+        )
+
+    def _refresh_pending_field_indicators(self):
+        for key in self.pending_field_indicators:
+            self._refresh_pending_field_indicator(key)
 
     def _capture_editor_state(self):
         paths = tuple(
@@ -2052,6 +2132,7 @@ class MusicEditorWindow(QMainWindow):
             self.mb_score_label.setText(snapshot.score_text)
             self._filename_clue_draft = snapshot.filename_clue_draft
             self._set_filename_clue_status(snapshot.filename_clue_status_text)
+            self._refresh_pending_field_indicators()
             for key, cursor in snapshot.cursor_states.items():
                 line_edit = self.inputs[key].lineEdit()
                 line_edit.setCursorPosition(
@@ -2632,6 +2713,7 @@ class MusicEditorWindow(QMainWindow):
         self._cover_fingerprint_cache = {}
         self._physical_album_key_cache = {}
         self.album_session.reset_for_file_load()
+        self._refresh_pending_field_indicators()
         self.api_cache = {} 
         self.album_source_preferences = {}
         
@@ -2799,6 +2881,7 @@ class MusicEditorWindow(QMainWindow):
         }
         if len(selected_albums) == 1:
             self.album_session.last_selected_album = next(iter(selected_albums))
+        self._refresh_pending_field_indicators()
 
     def _album_source_key(self, path):
         group_id = self.album_session.virtual_album_map.get(path)
@@ -2915,6 +2998,7 @@ class MusicEditorWindow(QMainWindow):
             self.current_cover_data = None
             self._cover_is_mixed = False
             self.update_cover_display(False)
+            self._refresh_pending_field_indicators()
             self._refresh_filename_clue_action()
             return
             
@@ -2974,6 +3058,7 @@ class MusicEditorWindow(QMainWindow):
             self.update_cover_display(multiple_different=True)
 
         self.cover_modified_in_batch = False
+        self._refresh_pending_field_indicators()
         self._refresh_filename_clue_action()
 
         if len(paths) == 1 and paths[0] in self.api_cache and not self.chk_no_cache.isChecked():
