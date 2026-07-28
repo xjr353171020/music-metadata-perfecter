@@ -96,6 +96,7 @@ class EditorStateSnapshot:
     selected_source: str = ""
     status_text: str = ""
     score_text: str = ""
+    filename_clue_status_text: str = ""
 
 
 @dataclass(frozen=True)

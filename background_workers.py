@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from audio_tagger import AudioTagger
+from filename_clue import analyze_filename_clues
 from metadata_save_service import MetadataRestoreService, MetadataSaveService
 from search_cancellation import SearchCancelled, check_cancelled
 
@@ -80,6 +81,43 @@ class FetchWorker(QThread):
             return
         self.finished_sig.emit(
             success, api_data, raw_json, msg, self.path, self.request_id, False
+        )
+
+
+class FilenameClueWorker(QThread):
+    """Analyze one filename without reading or mutating any widget state."""
+
+    finished_sig = pyqtSignal(object, str, int, bool)
+
+    def __init__(
+        self,
+        filename,
+        path,
+        request_id=0,
+        cancel_event=None,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.filename = filename
+        self.path = path
+        self.request_id = request_id
+        self.cancel_event = cancel_event or threading.Event()
+
+    def cancel(self):
+        self.cancel_event.set()
+        self.requestInterruption()
+
+    def run(self):
+        if self.cancel_event.is_set():
+            self.finished_sig.emit(None, self.path, self.request_id, True)
+            return
+        result = analyze_filename_clues(self.filename)
+        cancelled = self.cancel_event.is_set()
+        self.finished_sig.emit(
+            None if cancelled else result,
+            self.path,
+            self.request_id,
+            cancelled,
         )
 
 

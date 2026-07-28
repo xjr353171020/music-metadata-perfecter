@@ -65,12 +65,13 @@ For development without VS Code, the supported machine-local entry point is the 
 | `metadata_save_service.py` | `MetadataSaveService`, `MetadataRestoreService`, result DTOs; snapshot, execute, read back, conflict-check | `audio_tagger`, `save_plan`, `undo_manager` | Widget state, Provider logic | High |
 | `audio_tagger.py` | `AudioTagger`; MP3 ID3 and FLAC read/update/exact managed restore | Mutagen; optional Pillow | UI, album sync, Provider matching | High |
 | `undo_manager.py` | Editor/saved snapshots, `SessionPatch`, saved transactions, LIFO undo/redo stacks and limits | stdlib only | Applying widgets or writing files | High |
+| `filename_clue.py` | `analyze_filename_clues()`; conservative filename-stem parsing into a five-field `FilenameClueResult` | stdlib only | Qt, network, Provider matching, tag writes | Medium |
 | `metadata_api.py` | Run both Providers, normalize cross-source scores, select a default, retain both results | Provider adapters, cancellation | UI, tag writing | High |
 | `mb_api.py` | MusicBrainz release/recording/artist requests, matching, identities, caches, pacing | `requests`, `config`, cancellation | UI, Apple rules, tag writes | High |
 | `apple_music_api.py` | iTunes collection/track search, storefront strategy, matching, localization calls, caches | `requests`, MB similarity helpers, resolver, cancellation | UI, tag writes | High |
 | `artist_name_resolver.py` | Select an existing Apple artist variant; optional DeepSeek tie-break | `requests`, `config` | Inventing artist metadata, tag writes | High |
 | `search_cancellation.py` | `SearchCancelled`, event checks, cancellable wait | stdlib | UI reporting, request identity | Low |
-| `background_workers.py` | `FetchWorker`, `FileLoaderWorker`, `SaveWorker`, `RestoreWorker` and signal contracts | Qt, tagger, services, cancellation | Direct widget mutation | Medium |
+| `background_workers.py` | `FetchWorker`, `FilenameClueWorker`, `FileLoaderWorker`, `SaveWorker`, `RestoreWorker` and signal contracts | Qt, filename analysis, tagger, services, cancellation | Direct widget mutation | Medium |
 | `cover_fetch_worker.py` | `CoverFetchWorker`; Apple/CAA artwork requests, retry, cancellation, debug stats | Qt, `requests`; delayed MB similarity import | Gallery UI, tag persistence | High |
 | `cover_gallery.py` | `CoverGalleryDialog`; display candidates and return selected bytes | Qt | Network or tag writes | Low |
 | `library_widgets.py` | Touch-safe list/combo/index widgets and smooth scrolling | Qt | Metadata/session rules | Low |
@@ -91,6 +92,7 @@ Widget-local/presentation state includes:
 
 - editable combo values, checkboxes, lock buttons, cursor/selection positions;
 - result-panel line edits and selected Provider button;
+- filename-clue action availability and its compact source/no-result text;
 - list/header items, hidden search rows, scroll animation, and status markers;
 - `current_cover_data`, mixed/modified flags, overlay/progress state;
 - audio-player media state.
@@ -123,6 +125,7 @@ Remaining coupling in `main_window.py` is real rather than merely line-count rel
 | `_selection_metadata_baseline` | Window | Replaced after selection/save/restore | Text/cover baseline used to warn before abandoning unsaved metadata edits |
 | `current_cover_data` | Window | Current selection/edit | Pending cover bytes or `None`; paired with `_cover_is_mixed` and `cover_modified_in_batch` |
 | `mb_inputs`, `available_source_results`, `_current_metadata_source` | Window | Current Provider result | Displayed candidate and source map; result-level source selection |
+| filename-clue status text and request identity | Window | Current selection/request | Presentation-only source text is captured in editor undo; result values themselves live only in `inputs` |
 | `api_cache[path]` | Window | Until directory reload | Cached normalized Provider result, raw logs, and display strings |
 | `album_source_preferences[key]` | Window | Until directory reload | Preferred source per virtual/physical album identity |
 | `_physical_album_key_cache`, `_cover_fingerprint_cache` | Window | Invalidated on known metadata updates | Derived album/cover identity acceleration |
@@ -336,6 +339,7 @@ Restore runs in `RestoreWorker`. Successful paths update `all_files_data`, are r
 | --- | --- | --- | --- |
 | `FileLoaderWorker` | directory | progress `(current,total,filename)`, finished `(sortable,data)` | No cancellation or request generation |
 | `FetchWorker` | local clues, IDs, local metadata, request ID/event | progress text; finished `(success,data,raw,msg,path,id,cancelled)` | Event + `requestInterruption`; Provider checkpoints; window ID rejection |
+| `FilenameClueWorker` | one basename, target path, request ID/event | finished `(result,path,id,cancelled)` | Plain Qt-free result; window rechecks request ID, path, current blanks, and locks |
 | `CoverFetchWorker` | artist, album, release/artwork identity, request ID/event | progress text; finished `(images,stats,raw,id,cancelled)` | Event + interruption; retry waits are cancelable; window ID rejection |
 | `SaveWorker` | immutable `SavePlan`, service | item progress, result/failure | No cancellation; close is blocked while running |
 | `RestoreWorker` | transaction changes, service | item progress, result/failure | No cancellation; close is blocked while running |
@@ -347,6 +351,8 @@ Metadata/cover cancellation sets a `threading.Event`, calls `requestInterruption
 Stale-result prevention is separate: `_metadata_search_generation` and `_cover_search_generation` monotonically assign IDs; completion slots return immediately unless the ID equals the active ID. Cancelled IDs also prevent a cancellation race from being displayed as failure. Metadata and cover searches have separate generations and cancelled-ID sets. Progress signals do not carry IDs, so their safety depends on only one same-kind worker being active and cancelled fetch progress being suppressed.
 
 MusicBrainz and Apple metadata acquisition are sequential within one worker, not parallel. Auxiliary NCM conversion, audio moves, lyric deletion, settings writes, debug-log export, and temporary cover-file writes still execute synchronously on the UI thread.
+
+Filename clue analysis is a separate explicit single-track action. The current Qt-free entry performs only deterministic local parsing; the window writes accepted non-empty values into blank, unlocked editor fields through one `_record_editor_mutation()` command. It preserves checkbox state and does not invoke Provider search, `SavePlan`, or tag writes.
 
 Worker cleanup connects `QThread.finished` to a slot that calls `deleteLater()` and clears the stored worker only if identities match. Closing during a search requests cancellation and ignores that close event; closing during save/restore is simply ignored until completion.
 
@@ -599,6 +605,7 @@ These helpers currently run synchronously under a wait cursor, so large operatio
 | New cover source | Extend `CoverFetchWorker` result/stats/debug handling and cancellation/retry behavior; review gallery and cover tests. Do not write tags there. |
 | New background operation | Add a focused worker/signal contract in `background_workers.py` or a dedicated worker module, then create/clean it in the window with close/cancel rules and stale identity if overlap is possible. |
 | New editor command | Use `_record_user_editor_change()` for normal widget signals or `_record_editor_mutation()` for atomic programmatic actions; extend snapshots/session patches only for state required to reverse it. |
+| New filename-clue rule | Keep evidence parsing in `filename_clue.py`, return only the fixed five-field result, and test through `analyze_filename_clues()` plus the existing window boundary. Do not turn it into a Provider or tag writer. |
 | New save rule | Implement in `save_plan.py` with plain request data and tests; review service result semantics and window reporting only if the plan/result contract changes. |
 
 Do not create an interface or registry merely to anticipate one of these extensions. Add the narrowest boundary required by an actual feature.

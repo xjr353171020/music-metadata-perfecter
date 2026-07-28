@@ -25,11 +25,18 @@ from audio_tagger import AudioTagger
 from album_session import AlbumSession
 from album_initials import album_initial, album_navigation_sort_key
 from config import APP_NAME, APP_SETTINGS, save_settings
+from filename_clue import FILENAME_CLUE_FIELDS, FilenameClueSource
 from file_workflow import convert_ncm_files, delete_ncm_files, list_ncm_files, move_audio_files, clean_lrc_files
 from metadata_save_service import MetadataRestoreService, MetadataSaveService
 from save_plan import SavePlanRequest, build_save_plan
 from ui_components import FileLoadProgressDialog, LoadingOverlay, SettingsDialog, DebugDialog
-from background_workers import FetchWorker, FileLoaderWorker, RestoreWorker, SaveWorker
+from background_workers import (
+    FetchWorker,
+    FileLoaderWorker,
+    FilenameClueWorker,
+    RestoreWorker,
+    SaveWorker,
+)
 from cover_gallery import CoverGalleryDialog
 from cover_fetch_worker import CoverFetchWorker
 from audio_player_widget import AudioPlayerWidget
@@ -90,6 +97,9 @@ class MusicEditorWindow(QMainWindow):
         self._cover_search_generation = 0
         self._active_cover_search_id = None
         self._cancelled_cover_search_ids = set()
+        self._filename_clue_generation = 0
+        self._active_filename_clue_request_id = None
+        self._active_filename_clue_path = ""
         self._search_buttons = []
         
         self.api_cache = {}
@@ -139,6 +149,7 @@ class MusicEditorWindow(QMainWindow):
         self._search_restore_timer.setInterval(40)
         self._search_restore_timer.timeout.connect(self.restore_full_list)
         self._connect_undo_capture()
+        self._refresh_filename_clue_action()
         self._editor_baseline = self._capture_editor_state()
         QApplication.instance().installEventFilter(self)
         self._initial_load_scheduled = False
@@ -359,6 +370,7 @@ class MusicEditorWindow(QMainWindow):
         # 精确到像素级的 UI 对齐设计：锁定顶部区域 185px 高度
         # =========================================================
         middle_scroll_layout.addWidget(self._build_cover_section())
+        middle_scroll_layout.addWidget(self._build_filename_clue_row())
         middle_scroll_layout.addLayout(self._build_metadata_field_editor())
         middle_scroll_layout.addStretch()
 
@@ -496,6 +508,32 @@ class MusicEditorWindow(QMainWindow):
         cover_main_layout.addLayout(res_layout)
         
         return cover_container
+
+    def _build_filename_clue_row(self):
+        container = QWidget()
+        container.setFixedHeight(34)
+        layout = QHBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        self.btn_filename_clue = QPushButton("从文件名提取线索")
+        self.btn_filename_clue.setFixedHeight(30)
+        self.btn_filename_clue.setStyleSheet(
+            "QPushButton { padding: 4px 10px; font-size: 9pt; font-weight: bold; "
+            "border: 1px solid #bdc3c7; border-radius: 4px; "
+            "background-color: #f8f9fa; color: #2c3e50; } "
+            "QPushButton:disabled { color: #95a5a6; background-color: #f4f6f7; }"
+        )
+        self.btn_filename_clue.clicked.connect(self.start_filename_clue_analysis)
+        layout.addWidget(self.btn_filename_clue)
+
+        self.filename_clue_status_label = QLabel("")
+        self.filename_clue_status_label.setFixedHeight(30)
+        self.filename_clue_status_label.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
+        layout.addWidget(self.filename_clue_status_label, stretch=1)
+        return container
 
     def _build_metadata_field_editor(self):
         local_form_layout = QVBoxLayout()
@@ -1545,7 +1583,9 @@ class MusicEditorWindow(QMainWindow):
                 self.mb_apply_btns[key].setStyleSheet("padding: 4px; font-weight: bold; background-color: #3498db; color: white; border-radius: 4px; font-size: 10pt;")
 
         items = [item for item in self.file_list.selectedItems() if item.data(Qt.ItemDataRole.UserRole + 2) == "track"]
-        if not items: return
+        if not items:
+            self._refresh_filename_clue_action()
+            return
         for item in items:
             path = os.path.join(self.music_dir, self.get_real_filename(item))
             self.album_session.set_lock(path, key, is_locked)
@@ -1583,6 +1623,7 @@ class MusicEditorWindow(QMainWindow):
                 session_after=self._capture_lock_session_patch(key),
             ))
             self._editor_baseline = after
+        self._refresh_filename_clue_action()
 
     def load_locks_for_selection(self, paths):
         if not paths: return
@@ -1604,6 +1645,7 @@ class MusicEditorWindow(QMainWindow):
                 self.mb_apply_btns[key].setEnabled(not is_locked)
                 if is_locked: self.mb_apply_btns[key].setStyleSheet("padding: 4px; font-weight: bold; background-color: #bdc3c7; color: white; border-radius: 4px; font-size: 10pt;")
                 else: self.mb_apply_btns[key].setStyleSheet("padding: 4px; font-weight: bold; background-color: #3498db; color: white; border-radius: 4px; font-size: 10pt;")
+        self._refresh_filename_clue_action()
 
     def apply_mb_field(self, key):
         if self.lock_btns[key].isChecked(): return
@@ -1745,6 +1787,7 @@ class MusicEditorWindow(QMainWindow):
 
     def _connect_undo_capture(self):
         for key, combo in self.inputs.items():
+            combo.currentTextChanged.connect(self._refresh_filename_clue_action)
             combo.lineEdit().textEdited.connect(
                 lambda _text, field=key: self._record_user_editor_change(
                     f"撤销{field}编辑", f"field:{field}"
@@ -1791,6 +1834,7 @@ class MusicEditorWindow(QMainWindow):
             selected_source=self._current_metadata_source,
             status_text=self.mb_status_label.text(),
             score_text=self.mb_score_label.text(),
+            filename_clue_status_text=self.filename_clue_status_label.text(),
         )
 
     def _record_user_editor_change(self, description, merge_key=None):
@@ -1961,6 +2005,7 @@ class MusicEditorWindow(QMainWindow):
             )
             self.mb_status_label.setText(snapshot.status_text)
             self.mb_score_label.setText(snapshot.score_text)
+            self._set_filename_clue_status(snapshot.filename_clue_status_text)
             for key, cursor in snapshot.cursor_states.items():
                 line_edit = self.inputs[key].lineEdit()
                 line_edit.setCursorPosition(
@@ -2151,6 +2196,153 @@ class MusicEditorWindow(QMainWindow):
         if cb.lineEdit(): 
             cb.lineEdit().setCursorPosition(0)
             cb.lineEdit().setToolTip(text) 
+
+    def _set_filename_clue_status(self, text):
+        self.filename_clue_status_label.setText(text)
+        color = "#d68910" if text == "未从文件名提取到可填线索" else "#7f8c8d"
+        self.filename_clue_status_label.setStyleSheet(
+            f"color: {color}; font-size: 9pt;"
+        )
+
+    def _filename_clue_target_path(self):
+        paths = self._selected_track_paths()
+        if len(paths) != 1:
+            return ""
+        return next(iter(paths))
+
+    def _eligible_filename_clue_fields(self):
+        path = self._filename_clue_target_path()
+        if not path:
+            return ()
+        identity_values = [
+            self.inputs[key].currentText().strip()
+            for key in ("title", "artist", "album")
+        ]
+        if all(identity_values):
+            return ()
+        return tuple(
+            key
+            for key in FILENAME_CLUE_FIELDS
+            if not self.inputs[key].currentText().strip()
+            and not self.lock_btns[key].isChecked()
+        )
+
+    def _refresh_filename_clue_action(self, *_args):
+        if not hasattr(self, "btn_filename_clue"):
+            return
+        busy = (
+            self._save_in_progress
+            or self._undo_in_progress
+            or self.is_metadata_search_running()
+            or self.is_cover_search_running()
+            or self.is_filename_clue_analysis_running()
+        )
+        self.btn_filename_clue.setEnabled(
+            not busy and bool(self._eligible_filename_clue_fields())
+        )
+
+    def is_filename_clue_analysis_running(self):
+        worker = getattr(self, "filename_clue_worker", None)
+        return bool(worker and worker.isRunning())
+
+    def start_filename_clue_analysis(self):
+        eligible_fields = self._eligible_filename_clue_fields()
+        target_path = self._filename_clue_target_path()
+        if (
+            not target_path
+            or not eligible_fields
+            or self._save_in_progress
+            or self._undo_in_progress
+            or self.is_metadata_search_running()
+            or self.is_cover_search_running()
+            or self.is_filename_clue_analysis_running()
+        ):
+            self._refresh_filename_clue_action()
+            return
+
+        self._filename_clue_generation += 1
+        request_id = self._filename_clue_generation
+        self._active_filename_clue_request_id = request_id
+        self._active_filename_clue_path = target_path
+        self._set_filename_clue_status("")
+        self.overlay.start()
+        self.btn_filename_clue.setEnabled(False)
+        self.filename_clue_worker = FilenameClueWorker(
+            os.path.basename(target_path),
+            target_path,
+            request_id=request_id,
+            cancel_event=threading.Event(),
+            parent=self,
+        )
+        self.filename_clue_worker.finished_sig.connect(
+            self.on_filename_clue_analysis_finished
+        )
+        self.filename_clue_worker.finished.connect(
+            self._cleanup_filename_clue_worker
+        )
+        self.filename_clue_worker.start()
+
+    def on_filename_clue_analysis_finished(
+        self,
+        result,
+        target_path,
+        request_id,
+        cancelled,
+    ):
+        if request_id != self._active_filename_clue_request_id:
+            return
+        self._active_filename_clue_request_id = None
+        active_path = self._active_filename_clue_path
+        self._active_filename_clue_path = ""
+        if (
+            cancelled
+            or result is None
+            or target_path != active_path
+            or target_path != self._filename_clue_target_path()
+        ):
+            return
+
+        updates = {
+            key: str(result.values.get(key, "") or "").strip()
+            for key in FILENAME_CLUE_FIELDS
+            if str(result.values.get(key, "") or "").strip()
+            and not self.inputs[key].currentText().strip()
+            and not self.lock_btns[key].isChecked()
+        }
+        if not updates:
+            self._set_filename_clue_status("未从文件名提取到可填线索")
+            self._editor_baseline = self._capture_editor_state()
+            return
+
+        status_text = (
+            "DeepSeek解析"
+            if result.source == FilenameClueSource.DEEPSEEK
+            else "本地规则解析"
+        )
+
+        def apply_filename_clues():
+            for key, value in updates.items():
+                self.update_combo_text(self.inputs[key], value)
+            self._set_filename_clue_status(status_text)
+
+        self._record_editor_mutation(
+            "撤销文件名线索解析",
+            apply_filename_clues,
+        )
+        self._refresh_filename_clue_action()
+
+    def _cleanup_filename_clue_worker(self):
+        worker = self.sender()
+        if worker:
+            worker.deleteLater()
+        if getattr(self, "filename_clue_worker", None) is worker:
+            self.filename_clue_worker = None
+            if (
+                not self.is_metadata_search_running()
+                and not self.is_cover_search_running()
+            ):
+                self.overlay.stop()
+            self._refresh_filename_clue_action()
 
     def keyPressEvent(self, event):
         focus = QApplication.focusWidget()
@@ -2607,6 +2799,7 @@ class MusicEditorWindow(QMainWindow):
             self._restoring_rejected_selection = False
 
     def _on_file_selected_without_undo(self):
+        self._set_filename_clue_status("")
         items = [item for item in self.file_list.selectedItems() if item.data(Qt.ItemDataRole.UserRole + 2) == "track"]
         if not items: 
             self.clear_mb_fields()
@@ -2615,6 +2808,7 @@ class MusicEditorWindow(QMainWindow):
             self.current_cover_data = None
             self._cover_is_mixed = False
             self.update_cover_display(False)
+            self._refresh_filename_clue_action()
             return
             
         self.clear_mb_fields() 
@@ -2673,6 +2867,7 @@ class MusicEditorWindow(QMainWindow):
             self.update_cover_display(multiple_different=True)
 
         self.cover_modified_in_batch = False
+        self._refresh_filename_clue_action()
 
         if len(paths) == 1 and paths[0] in self.api_cache and not self.chk_no_cache.isChecked():
             cache_obj = self.api_cache[paths[0]]
