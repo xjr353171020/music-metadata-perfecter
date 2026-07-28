@@ -8,6 +8,7 @@ import json
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
+from types import MappingProxyType
 from typing import Any, Iterable, Mapping
 
 
@@ -80,6 +81,22 @@ class CursorState:
 
 
 @dataclass(frozen=True)
+class FilenameClueDraftState:
+    """Minimal provenance retained while parsed values remain in the editor."""
+
+    target_path: str
+    source: str
+    field_values: Mapping[str, str] = field(default_factory=dict)
+
+    def __post_init__(self):
+        object.__setattr__(
+            self,
+            "field_values",
+            MappingProxyType(dict(self.field_values)),
+        )
+
+
+@dataclass(frozen=True)
 class EditorStateSnapshot:
     """Widget-free snapshot of the current editor and result panels."""
 
@@ -97,6 +114,7 @@ class EditorStateSnapshot:
     status_text: str = ""
     score_text: str = ""
     filename_clue_status_text: str = ""
+    filename_clue_draft: FilenameClueDraftState | None = None
 
 
 @dataclass(frozen=True)

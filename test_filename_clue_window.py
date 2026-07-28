@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import copy
 import os
 import threading
 import time
@@ -9,10 +10,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QThread, Qt, pyqtSignal
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from filename_clue import FilenameClueResult, FilenameClueSource
 from main_window import MusicEditorWindow
+from metadata_save_service import MetadataSaveService
 
 
 class BlockingFilenameClueWorker(QThread):
@@ -44,6 +46,25 @@ class BlockingFilenameClueWorker(QThread):
         self.finished_sig.emit(None, self.path, self.request_id, True)
 
 
+class MemoryTagger:
+    store = {}
+    fail_paths = set()
+
+    def __init__(self, path):
+        self.path = path
+
+    def read_tags(self):
+        return copy.deepcopy(self.store[self.path])
+
+    def read_managed_tags(self):
+        return self.read_tags()
+
+    def update_tags(self, metadata):
+        if self.path in self.fail_paths:
+            raise OSError("controlled write failure")
+        self.store[self.path].update(copy.deepcopy(metadata))
+
+
 class FilenameClueWindowTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -64,6 +85,8 @@ class FilenameClueWindowTests(unittest.TestCase):
         self._wait_until(
             lambda: getattr(self.window, "filename_clue_worker", None) is None
         )
+        self._wait_until(lambda: not self.window._save_in_progress)
+        self._wait_until(lambda: getattr(self.window, "save_worker", None) is None)
         self.window.close()
         self.window.deleteLater()
         self.app.processEvents()
@@ -123,6 +146,17 @@ class FilenameClueWindowTests(unittest.TestCase):
                 return
             time.sleep(0.005)
         self.fail("timed out waiting for Qt condition")
+
+    def _analyze_filename(self):
+        self.window.btn_filename_clue.click()
+        self._wait_until(
+            lambda: getattr(self.window, "filename_clue_worker", None) is None
+        )
+
+    def _use_memory_save_service(self):
+        MemoryTagger.store = copy.deepcopy(self.window.album_session.all_files_data)
+        MemoryTagger.fail_paths = set()
+        self.window._save_service_factory = lambda: MetadataSaveService(MemoryTagger)
 
     def test_single_track_analysis_is_one_undoable_editor_draft(self):
         filename = "01 - Artist - Song (Live).flac"
@@ -285,6 +319,208 @@ class FilenameClueWindowTests(unittest.TestCase):
         )
         self.assertEqual(self.window.inputs["title"].currentText(), "")
         self.assertEqual(self.window.undo_manager.count, 0)
+
+    def test_manual_identity_edit_clears_source_and_undo_restores_it(self):
+        self._populate([("Artist - Song.mp3", {})])
+        self._analyze_filename()
+
+        self.assertIsNotNone(self.window._filename_clue_draft)
+        line_edit = self.window.inputs["title"].lineEdit()
+        line_edit.setFocus()
+        QTest.keyClicks(line_edit, " changed")
+
+        self.assertEqual(self.window.filename_clue_status_label.text(), "")
+        self.assertIsNone(self.window._filename_clue_draft)
+
+        self.window.perform_undo()
+        self.assertEqual(self.window.inputs["title"].currentText(), "Song")
+        self.assertEqual(
+            self.window.filename_clue_status_label.text(),
+            "本地规则解析",
+        )
+        self.assertIsNotNone(self.window._filename_clue_draft)
+
+    def test_identity_dropdown_change_clears_source_and_undo_restores_it(self):
+        self._populate([("Artist - Song.mp3", {})])
+        self._analyze_filename()
+        combo = self.window.inputs["title"]
+        blank_index = combo.findText("<留白>")
+
+        self.assertGreaterEqual(blank_index, 0)
+        combo.setCurrentIndex(blank_index)
+        combo.activated.emit(blank_index)
+        self.app.processEvents()
+
+        self.assertEqual(self.window.filename_clue_status_label.text(), "")
+        self.assertIsNone(self.window._filename_clue_draft)
+
+        self.window.perform_undo()
+        self.assertEqual(self.window.inputs["title"].currentText(), "Song")
+        self.assertEqual(
+            self.window.filename_clue_status_label.text(),
+            "本地规则解析",
+        )
+        self.assertIsNotNone(self.window._filename_clue_draft)
+
+    def test_unrelated_editor_changes_keep_filename_clue_source(self):
+        self._populate([("Artist - Song.mp3", {})])
+        self._analyze_filename()
+
+        self.window.checkboxes["date"].click()
+        self.window.lock_btns["composer"].click()
+        comment = self.window.inputs["comment"].lineEdit()
+        comment.setFocus()
+        QTest.keyClicks(comment, "review note")
+
+        self.assertEqual(
+            self.window.filename_clue_status_label.text(),
+            "本地规则解析",
+        )
+        self.assertIsNotNone(self.window._filename_clue_draft)
+
+    def test_provider_application_clears_source_and_undo_restores_it(self):
+        self._populate([("Artist - Song.mp3", {})])
+        self._analyze_filename()
+        self.window.mb_inputs["title"].setText("Provider Song")
+
+        self.window.apply_mb_field("title")
+
+        self.assertEqual(self.window.inputs["title"].currentText(), "Provider Song")
+        self.assertEqual(self.window.filename_clue_status_label.text(), "")
+        self.assertIsNone(self.window._filename_clue_draft)
+
+        self.window.perform_undo()
+        self.assertEqual(self.window.inputs["title"].currentText(), "Song")
+        self.assertEqual(
+            self.window.filename_clue_status_label.text(),
+            "本地规则解析",
+        )
+
+    def test_successful_save_clears_fully_persisted_filename_clue(self):
+        paths, _items = self._populate([("01 - Artist - Song.mp3", {})])
+        path = paths[0]
+        self._analyze_filename()
+        self._use_memory_save_service()
+
+        self.window.save_left_only_and_stay()
+        self._wait_until(lambda: not self.window._save_in_progress)
+
+        self.assertEqual(self.window.filename_clue_status_label.text(), "")
+        self.assertIsNone(self.window._filename_clue_draft)
+        self.assertEqual(self.window.album_session.all_files_data[path]["title"], "Song")
+        self.assertEqual(self.window.album_session.all_files_data[path]["artist"], "Artist")
+        self.assertEqual(self.window.album_session.all_files_data[path]["track"], "01")
+
+    def test_save_with_provider_application_clears_filename_clue_source(self):
+        paths, _items = self._populate([("Artist - Song.mp3", {})])
+        path = paths[0]
+        self._analyze_filename()
+        self._use_memory_save_service()
+        self.window.last_fetch_success = True
+        self.window.mb_inputs["title"].setText("Provider Song")
+
+        self.window._execute_save(apply_mb=True, advance=False)
+        self._wait_until(lambda: not self.window._save_in_progress)
+
+        self.assertEqual(
+            self.window.album_session.all_files_data[path]["title"],
+            "Provider Song",
+        )
+        self.assertEqual(self.window.filename_clue_status_label.text(), "")
+        self.assertIsNone(self.window._filename_clue_draft)
+
+    def test_unchecked_filename_clue_field_survives_partial_save(self):
+        paths, _items = self._populate([("01 - Artist - Song.mp3", {})])
+        path = paths[0]
+        self._analyze_filename()
+        self.window.checkboxes["artist"].setChecked(False)
+        self._use_memory_save_service()
+
+        self.window.save_left_only_and_stay()
+        self._wait_until(lambda: not self.window._save_in_progress)
+
+        self.assertEqual(
+            self.window.filename_clue_status_label.text(),
+            "本地规则解析",
+        )
+        self.assertEqual(
+            self.window._filename_clue_draft.field_values,
+            {"artist": "Artist"},
+        )
+        self.assertEqual(self.window.album_session.all_files_data[path]["artist"], "")
+        self.assertEqual(self.window.inputs["artist"].currentText(), "Artist")
+
+    def test_failed_save_keeps_filename_clue_source(self):
+        paths, _items = self._populate([("Artist - Song.mp3", {})])
+        path = paths[0]
+        self._analyze_filename()
+        self._use_memory_save_service()
+        MemoryTagger.fail_paths = {path}
+
+        with patch("main_window.QMessageBox.warning"):
+            self.window.save_left_only_and_stay()
+            self._wait_until(lambda: not self.window._save_in_progress)
+
+        self.assertEqual(
+            self.window.filename_clue_status_label.text(),
+            "本地规则解析",
+        )
+        self.assertIsNotNone(self.window._filename_clue_draft)
+        self.assertEqual(self.window.album_session.all_files_data[path]["title"], "")
+
+    def test_selection_change_clears_filename_clue_lifecycle(self):
+        _paths, items = self._populate(
+            [("Artist - Song.mp3", {}), ("Another - Track.mp3", {})]
+        )
+        self._analyze_filename()
+
+        with patch(
+            "main_window.QMessageBox.question",
+            return_value=QMessageBox.StandardButton.Yes,
+        ):
+            self.window.file_list.clearSelection()
+            self.window.file_list.setCurrentItem(items[1])
+            items[1].setSelected(True)
+            self.window.on_file_selected()
+            self.app.processEvents()
+
+        self.assertEqual(self.window.filename_clue_status_label.text(), "")
+        self.assertIsNone(self.window._filename_clue_draft)
+
+    def test_directory_reload_clears_filename_clue_lifecycle(self):
+        self._populate([("Artist - Song.mp3", {})])
+        self._analyze_filename()
+        self.window.music_dir = os.path.join(os.getcwd(), ".missing-music-directory")
+
+        self.window.load_file_list()
+
+        self.assertEqual(self.window.filename_clue_status_label.text(), "")
+        self.assertIsNone(self.window._filename_clue_draft)
+        self.assertEqual(self.window.undo_manager.count, 0)
+
+    def test_directory_reload_cancels_active_filename_clue_request(self):
+        self._populate([("Artist - Song.mp3", {})])
+
+        with patch("main_window.FilenameClueWorker", BlockingFilenameClueWorker):
+            self.window.btn_filename_clue.click()
+            worker = self.window.filename_clue_worker
+            self._wait_until(worker.started_event.is_set)
+            self.window.music_dir = os.path.join(
+                os.getcwd(),
+                ".missing-music-directory",
+            )
+
+            self.window.load_file_list()
+
+            self.assertTrue(worker.cancel_event.is_set())
+            self.assertIsNone(self.window._active_filename_clue_request_id)
+            self.assertEqual(self.window._active_filename_clue_path, "")
+            self.assertEqual(self.window.filename_clue_status_label.text(), "")
+            self.assertIsNone(self.window._filename_clue_draft)
+            self.assertEqual(self.window.undo_manager.count, 0)
+            self._wait_until(
+                lambda: getattr(self.window, "filename_clue_worker", None) is None
+            )
 
 
 if __name__ == "__main__":

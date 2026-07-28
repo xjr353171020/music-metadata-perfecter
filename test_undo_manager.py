@@ -3,6 +3,7 @@ import unittest
 from undo_manager import (
     EditorStateSnapshot,
     EditorUndoCommand,
+    FilenameClueDraftState,
     ManagedMetadataSnapshot,
     SavedFileChange,
     SavedMetadataTransaction,
@@ -49,6 +50,20 @@ class UndoManagerTests(unittest.TestCase):
         manager.clear()
         self.assertFalse(manager.can_undo)
         self.assertEqual(manager.memory_bytes, 0)
+
+    def test_filename_clue_draft_state_copies_and_freezes_field_values(self):
+        field_values = {"title": "Song"}
+        state = FilenameClueDraftState(
+            target_path="one.mp3",
+            source="local_rules",
+            field_values=field_values,
+        )
+
+        field_values["title"] = "Changed"
+
+        self.assertEqual(state.field_values, {"title": "Song"})
+        with self.assertRaises(TypeError):
+            state.field_values["title"] = "Changed"
 
     def test_undo_and_redo_stacks_move_commands_and_new_push_clears_redo(self):
         manager = UndoManager()

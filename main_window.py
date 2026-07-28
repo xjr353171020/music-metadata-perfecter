@@ -45,6 +45,7 @@ from undo_manager import (
     CursorState,
     EditorStateSnapshot,
     EditorUndoCommand,
+    FilenameClueDraftState,
     ManagedMetadataSnapshot,
     SavedFileChange,
     SavedMetadataTransaction,
@@ -101,6 +102,7 @@ class MusicEditorWindow(QMainWindow):
         self._active_filename_clue_request_id = None
         self._active_filename_clue_path = ""
         self._cancelled_filename_clue_request_ids = set()
+        self._filename_clue_draft = None
         self._search_buttons = []
         
         self.api_cache = {}
@@ -1653,15 +1655,25 @@ class MusicEditorWindow(QMainWindow):
         if self.lock_btns[key].isChecked(): return
         val = self.mb_inputs[key].text()
         if val:
+            def apply_field():
+                identity_changed = (
+                    key in FILENAME_CLUE_FIELDS
+                    and self.inputs[key].currentText() != val
+                )
+                self.update_combo_text(self.inputs[key], val)
+                if identity_changed:
+                    self._clear_filename_clue_draft()
+
             self._record_editor_mutation(
                 f"撤销应用{key}",
-                lambda: self.update_combo_text(self.inputs[key], val),
+                apply_field,
             )
 
     def apply_all_mb_fields(self):
         def apply_all():
             items = [item for item in self.file_list.selectedItems() if item.data(Qt.ItemDataRole.UserRole + 2) == "track"]
             protected_fields = {"title", "artist", "track", "disc"}
+            identity_changed = False
             for key, le in self.mb_inputs.items():
                 if self.lock_btns[key].isChecked(): continue
                 # A metadata query describes one track.  When an album is selected,
@@ -1669,7 +1681,15 @@ class MusicEditorWindow(QMainWindow):
                 if len(items) > 1 and key in protected_fields:
                     continue
                 val = le.text()
-                if val: self.update_combo_text(self.inputs[key], val)
+                if val:
+                    if (
+                        key in FILENAME_CLUE_FIELDS
+                        and self.inputs[key].currentText() != val
+                    ):
+                        identity_changed = True
+                    self.update_combo_text(self.inputs[key], val)
+            if identity_changed:
+                self._clear_filename_clue_draft()
         self._record_editor_mutation("撤销全部应用", apply_all)
 
     def clear_mb_fields(self):
@@ -1792,12 +1812,15 @@ class MusicEditorWindow(QMainWindow):
             combo.currentTextChanged.connect(self._refresh_filename_clue_action)
             combo.lineEdit().textEdited.connect(
                 lambda _text, field=key: self._record_user_editor_change(
-                    f"撤销{field}编辑", f"field:{field}"
+                    f"撤销{field}编辑",
+                    f"field:{field}",
+                    identity_field=field,
                 )
             )
             combo.activated.connect(
                 lambda _index, field=key: self._record_user_editor_change(
-                    f"撤销{field}选项修改"
+                    f"撤销{field}选项修改",
+                    identity_field=field,
                 )
             )
             self.checkboxes[key].clicked.connect(
@@ -1837,9 +1860,15 @@ class MusicEditorWindow(QMainWindow):
             status_text=self.mb_status_label.text(),
             score_text=self.mb_score_label.text(),
             filename_clue_status_text=self.filename_clue_status_label.text(),
+            filename_clue_draft=self._filename_clue_draft,
         )
 
-    def _record_user_editor_change(self, description, merge_key=None):
+    def _record_user_editor_change(
+        self,
+        description,
+        merge_key=None,
+        identity_field=None,
+    ):
         if self.undo_manager.recording_suspended or self._undo_in_progress:
             return
         after = self._capture_editor_state()
@@ -1847,6 +1876,14 @@ class MusicEditorWindow(QMainWindow):
         if before is None or before.selected_paths != after.selected_paths:
             self._editor_baseline = after
             return
+        if (
+            self._filename_clue_draft is not None
+            and identity_field in FILENAME_CLUE_FIELDS
+            and before.field_values.get(identity_field)
+            != after.field_values.get(identity_field)
+        ):
+            self._clear_filename_clue_draft()
+            after = self._capture_editor_state()
         if before == after:
             return
         effective_merge_key = None
@@ -2007,6 +2044,7 @@ class MusicEditorWindow(QMainWindow):
             )
             self.mb_status_label.setText(snapshot.status_text)
             self.mb_score_label.setText(snapshot.score_text)
+            self._filename_clue_draft = snapshot.filename_clue_draft
             self._set_filename_clue_status(snapshot.filename_clue_status_text)
             for key, cursor in snapshot.cursor_states.items():
                 line_edit = self.inputs[key].lineEdit()
@@ -2212,6 +2250,29 @@ class MusicEditorWindow(QMainWindow):
             f"color: {color}; font-size: 9pt;"
         )
 
+    def _clear_filename_clue_draft(self):
+        if self._filename_clue_draft is None:
+            return
+        self._filename_clue_draft = None
+        self._set_filename_clue_status("")
+
+    def _cancel_filename_clue_request(self):
+        request_id = self._active_filename_clue_request_id
+        if request_id is not None:
+            self._cancelled_filename_clue_request_ids.add(request_id)
+        worker = getattr(self, "filename_clue_worker", None)
+        if worker and worker.isRunning():
+            worker.cancel()
+        self._active_filename_clue_request_id = None
+        self._active_filename_clue_path = ""
+
+    def _reset_filename_clue_lifecycle(self, cancel_request=False):
+        if cancel_request:
+            self._cancel_filename_clue_request()
+        self._filename_clue_draft = None
+        self._set_filename_clue_status("")
+        self._refresh_filename_clue_action()
+
     def _filename_clue_target_path(self):
         paths = self._selected_track_paths()
         if len(paths) != 1:
@@ -2340,6 +2401,11 @@ class MusicEditorWindow(QMainWindow):
         def apply_filename_clues():
             for key, value in updates.items():
                 self.update_combo_text(self.inputs[key], value)
+            self._filename_clue_draft = FilenameClueDraftState(
+                target_path=target_path,
+                source=result.source.value,
+                field_values=dict(updates),
+            )
             self._set_filename_clue_status(status_text)
 
         self._record_editor_mutation(
@@ -2545,6 +2611,7 @@ class MusicEditorWindow(QMainWindow):
         self.search_mb_album()
 
     def load_file_list(self):
+        self._reset_filename_clue_lifecycle(cancel_request=True)
         self.undo_manager.clear()
         self._editor_baseline = None
         self._loaded_selection_paths = ()
@@ -2794,6 +2861,8 @@ class MusicEditorWindow(QMainWindow):
             return
 
         with self.undo_manager.suspend_recording():
+            if selection_changed:
+                self._reset_filename_clue_lifecycle(cancel_request=True)
             self._on_file_selected_without_undo()
         self._loaded_selection_paths = new_paths
         self._selection_metadata_baseline = self._capture_selection_metadata_state()
@@ -2832,7 +2901,6 @@ class MusicEditorWindow(QMainWindow):
             self._restoring_rejected_selection = False
 
     def _on_file_selected_without_undo(self):
-        self._set_filename_clue_status("")
         items = [item for item in self.file_list.selectedItems() if item.data(Qt.ItemDataRole.UserRole + 2) == "track"]
         if not items: 
             self.clear_mb_fields()
@@ -3204,14 +3272,18 @@ class MusicEditorWindow(QMainWindow):
         ):
             event.ignore()
             return
+        if self.is_filename_clue_analysis_running():
+            self._reset_filename_clue_lifecycle(cancel_request=True)
+            event.ignore()
+            return
         if (
             self.is_metadata_search_running()
             or self.is_cover_search_running()
-            or self.is_filename_clue_analysis_running()
         ):
             self.cancel_active_search()
             event.ignore()
             return
+        self._reset_filename_clue_lifecycle()
         super().closeEvent(event)
 
     def skip_current_files(self):
@@ -3258,12 +3330,21 @@ class MusicEditorWindow(QMainWindow):
         
         protected_fields = {"title", "artist", "track", "disc"}
         if apply_mb and self.last_fetch_success:
+            identity_changed = False
             for key, cb in self.inputs.items():
                 if self.checkboxes[key].isChecked() and not self.lock_btns[key].isChecked():
                     if len(items) > 1 and key in protected_fields:
                         continue
                     mb_val = self.mb_inputs[key].text()
-                    if mb_val: self.update_combo_text(cb, mb_val)
+                    if mb_val:
+                        if (
+                            key in FILENAME_CLUE_FIELDS
+                            and cb.currentText() != mb_val
+                        ):
+                            identity_changed = True
+                        self.update_combo_text(cb, mb_val)
+            if identity_changed:
+                self._clear_filename_clue_draft()
 
         field_updates = {}
         checked_fields = set()
@@ -3374,6 +3455,7 @@ class MusicEditorWindow(QMainWindow):
                 return
             for path, metadata in result.saved_metadata.items():
                 self.album_session.all_files_data[path] = metadata
+            self._reconcile_filename_clue_draft_after_save(result)
             self._sync_selected_metadata_after_write(result.saved_metadata)
             self._invalidate_metadata_caches(result.saved_metadata)
             self._refresh_sortable_metadata(preserve_album_order=True)
@@ -3451,6 +3533,37 @@ class MusicEditorWindow(QMainWindow):
             self._save_in_progress = False
             self._set_save_controls_enabled(True)
             self._save_context = {}
+
+    def _reconcile_filename_clue_draft_after_save(self, result):
+        draft = self._filename_clue_draft
+        if draft is None:
+            return
+        saved_metadata = result.saved_metadata.get(draft.target_path)
+        if saved_metadata is None:
+            return
+
+        remaining = dict(draft.field_values)
+        for item in result.successful_items:
+            if item.kind != "primary" or item.path != draft.target_path:
+                continue
+            for key, expected_value in tuple(remaining.items()):
+                if key not in item.metadata:
+                    continue
+                written_value = str(item.metadata.get(key, "") or "")
+                read_back_value = str(saved_metadata.get(key, "") or "")
+                if written_value == expected_value == read_back_value:
+                    remaining.pop(key)
+
+        if remaining == dict(draft.field_values):
+            return
+        if remaining:
+            self._filename_clue_draft = FilenameClueDraftState(
+                target_path=draft.target_path,
+                source=draft.source,
+                field_values=remaining,
+            )
+            return
+        self._clear_filename_clue_draft()
 
     def _cleanup_save_worker(self):
         worker = self.sender()

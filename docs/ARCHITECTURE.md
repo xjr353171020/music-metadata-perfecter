@@ -125,7 +125,7 @@ Remaining coupling in `main_window.py` is real rather than merely line-count rel
 | `_selection_metadata_baseline` | Window | Replaced after selection/save/restore | Text/cover baseline used to warn before abandoning unsaved metadata edits |
 | `current_cover_data` | Window | Current selection/edit | Pending cover bytes or `None`; paired with `_cover_is_mixed` and `cover_modified_in_batch` |
 | `mb_inputs`, `available_source_results`, `_current_metadata_source` | Window | Current Provider result | Displayed candidate and source map; result-level source selection |
-| filename-clue status text and request identity | Window | Current selection/request | Presentation-only source text is captured in editor undo; result values themselves live only in `inputs` |
+| filename-clue draft state, status text, and request identity | Window | Current selection/editor/request | Frozen target/source/accepted-value provenance is captured in editor undo; searchable and saveable values themselves still live only in `inputs` |
 | `api_cache[path]` | Window | Until directory reload | Cached normalized Provider result, raw logs, and display strings |
 | `album_source_preferences[key]` | Window | Until directory reload | Preferred source per virtual/physical album identity |
 | `_physical_album_key_cache`, `_cover_fingerprint_cache` | Window | Invalidated on known metadata updates | Derived album/cover identity acceleration |
@@ -149,7 +149,7 @@ Parallel-source risks:
 | Tag read | `AudioTagger.read_tags()` | ID3/Vorbis/Picture tags -> normalized metadata dict | Returns empty defaults and prints format read errors; file is source |
 | Loaded state | `on_load_finished()` / `AlbumSession` | worker dict -> `all_files_data`, sortable list | UI thread; in-memory dict becomes current window truth |
 | Selection | `MusicEditorWindow` | selected paths -> `selected_files_data`, mixed/single combo values, cover state | Reads file directly only if path absent from loaded state; selection view is derived |
-| Filename clue draft | `FilenameClueWorker` + `filename_clue.py` + window | explicit single-track basename -> optional DeepSeek five-field result or deterministic local result -> blank unlocked editor fields | One uncached 15 s request at most; strict rejection falls back as a whole; cancellation does not fall back; editor remains source for pending values |
+| Filename clue draft | `FilenameClueWorker` + `filename_clue.py` + window | explicit single-track basename -> optional DeepSeek five-field result or deterministic local result -> blank unlocked editor fields plus minimal provenance | One uncached 15 s request at most; strict rejection falls back as a whole; cancellation does not fall back; editor remains the only pending metadata source |
 | Search request | `do_fetch()` | first selected path plus visible title/artist/album/track/disc and optional IDs -> `FetchWorker` arguments | UI validates required title/track clues; first selected item supplies local debug metadata |
 | MusicBrainz | `mb_api.search_mb()` | local clues/MBID -> normalized MB dict, raw records | Cooperative cancellation; 10 s requests, paced waits; release track titles override shared recording titles, and artist credits use the application multi-value separator |
 | Apple | `apple_music_api.search_apple_music()` | clues, MB artist identities, optional collection ID -> normalized Apple dict | Cooperative cancellation; 12 s requests; no live retry in this adapter |
@@ -322,7 +322,7 @@ Two different mechanisms share one LIFO `UndoManager`:
 
 ### Unsaved editor undo
 
-`EditorStateSnapshot` contains selected paths, current field text, checkbox/lock state, cursor selections, cover/mixed/modified state, result-panel values, selected source, and status/score text. `SessionPatch` optionally stores previous metadata/locks or source-preference/API-cache entries. Continuous typing in the same field/path can merge within 0.55 seconds. Applying undo suspends recording so restoration does not create a new command.
+`EditorStateSnapshot` contains selected paths, current field text, checkbox/lock state, cursor selections, cover/mixed/modified state, result-panel values, selected source, status/score text, and the optional filename-clue provenance record. `SessionPatch` optionally stores previous metadata/locks or source-preference/API-cache entries. Continuous typing in the same field/path can merge within 0.55 seconds. Applying undo suspends recording so restoration does not create a new command.
 
 The undo and redo stacks share limits of 40 commands and 128 MiB. Cover byte payloads are SHA-256 interned to reduce duplicate memory. Undo moves a command to redo, redo moves it back to undo, and a new command clears redo. Virtual-album grouping, skip markers, settings, and local file workflows are not represented as editor undo commands.
 
@@ -354,6 +354,8 @@ Stale-result prevention is separate: metadata, cover, and filename-clue generati
 MusicBrainz and Apple metadata acquisition are sequential within one worker, not parallel. Auxiliary NCM conversion, audio moves, lyric deletion, settings writes, debug-log export, and temporary cover-file writes still execute synchronously on the UI thread.
 
 Filename clue analysis is a separate explicit single-track action. With a configured key, the Qt-free entry sends only the filename stem, fixed five-key schema, and extraction constraints to `deepseek-chat`; it does not send directory paths, tags, covers, audio, or settings. Any malformed, extra-key, wrong-type, out-of-range, or lexically untraceable response is discarded in full before deterministic local parsing starts from the original stem. There is no retry or cache. The window writes accepted non-empty values into blank, unlocked editor fields through one `_record_editor_mutation()` command, preserves checkbox state, and does not invoke Provider search, `SavePlan`, or tag writes.
+
+After application, `FilenameClueDraftState` retains only the target path, source, and values actually filled by that result. It is provenance for the current editor draft, not another metadata store. An actual change to `title`, `artist`, `album`, `track`, or `disc` through typing, a combo selection, or Provider application clears the provenance inside the same reversible editor command; checkbox, lock, cover, and other-field changes do not. Successful primary save read-back removes only fields whose planned and read-back values both equal the accepted filename value. The status clears when none remain, while unchecked or failed fields retain it. Accepted selection changes and directory reload cancel any active filename request, invalidate its request identity, and clear the provenance.
 
 Worker cleanup connects `QThread.finished` to a slot that calls `deleteLater()` and clears the stored worker only if identities match. Closing during a search requests cancellation and ignores that close event; closing during save/restore is simply ignored until completion.
 
@@ -448,6 +450,7 @@ These helpers currently run synchronously under a wait cursor, so large operatio
 20. Provider source choice is whole-result choice; field application remains explicit.
 21. DeepSeek may select only an existing candidate and secrets never enter debug logs.
 22. Directory reload resets per-window state/history; saved undo is not durable.
+23. Filename-clue provenance never supplies search or save metadata; only the existing editor inputs do.
 
 ## 17. Known risks and technical debt
 
