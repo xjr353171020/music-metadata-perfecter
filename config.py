@@ -46,7 +46,7 @@ def save_settings(settings):
 APP_SETTINGS = load_settings()
 
 APP_NAME = "Music Metadata Perfecter"
-APP_VERSION = "2026.07.29.5"
+APP_VERSION = "2026.07.29.6"
 DEEPSEEK_CHAT_URL = "https://api.deepseek.com/chat/completions"
 USER_AGENT_APP = "MyMusicOrganizer"
 USER_AGENT_VERSION = "6.0"

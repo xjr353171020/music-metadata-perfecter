@@ -58,7 +58,7 @@ The window builds Provider identity arguments and candidate comparison styles fr
 
 Workers accept plain inputs, run off-thread, and emit plain outputs. Services remain Qt-free. Preserve signal argument contracts and identity-safe cleanup.
 
-Filename clue analysis follows this boundary: the worker owns only basename, Key, path, request ID, transport, and cancellation event, while the window rechecks request/path identity, eligible blank fields, and locks before applying one atomic editor mutation. The analyzer makes at most one uncached 15 s DeepSeek call, accepts only a traceable fixed five-key response, and uses all-or-nothing local fallback. `FilenameClueDraftState` retains only target, source, and accepted field values, and is reversible as part of `EditorStateSnapshot`; parsed metadata is never duplicated as another searchable or saveable source. Identity edits or Provider application clear the provenance, successful read-back shrinks it, failures retain it, and selection/reload boundaries discard it.
+Filename clue analysis follows this boundary: the worker owns only basename, Key, path, request ID, transport, and cancellation event, while the window rechecks request/path identity, eligible blank fields, and locks before applying one atomic editor mutation. The analyzer makes at most one uncached 15 s DeepSeek call, accepts only a traceable fixed five-key response with no duplicate keys, and uses all-or-nothing local fallback; standalone version qualifiers remain unsplit title evidence. `FilenameClueDraftState` retains only target, source, and accepted field values, and is reversible as part of `EditorStateSnapshot`; parsed metadata is never duplicated as another searchable or saveable source. Active provenance disables repeat analysis. Identity edits or Provider application clear the provenance, successful read-back shrinks it, failures retain it, and selection/reload boundaries discard it.
 
 ### Focused UI components
 
@@ -112,7 +112,7 @@ Load worker cancel methods, Provider checkpoints, metadata/cover/filename-clue g
 
 ### Filename clue privacy and fallback
 
-Load `filename_clue.py`, its two dedicated test modules, the worker signal, and the window start/completion/cancel methods. Preserve the stem-only payload, exact five-string-key contract, lexical evidence checks, one-request/no-cache rule, whole-result fallback, and the distinction between transport failure and cancellation. Never log the Key, Authorization header, payload, full settings, or local path.
+Load `filename_clue.py`, its two dedicated test modules, the worker signal, and the window start/completion/cancel methods. Preserve the stem-only payload, exact five-string-key contract including duplicate-key rejection, lexical evidence checks, conservative qualifier handling, one-request/no-cache rule, whole-result fallback, active-provenance repeat guard, and the distinction between transport failure and cancellation. Never log the Key, Authorization header, payload, full settings, or local path.
 
 ### Cover state
 

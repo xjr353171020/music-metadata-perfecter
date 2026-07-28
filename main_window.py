@@ -2132,6 +2132,7 @@ class MusicEditorWindow(QMainWindow):
             self.mb_score_label.setText(snapshot.score_text)
             self._filename_clue_draft = snapshot.filename_clue_draft
             self._set_filename_clue_status(snapshot.filename_clue_status_text)
+            self._refresh_filename_clue_action()
             self._refresh_pending_field_indicators()
             for key, cursor in snapshot.cursor_states.items():
                 line_edit = self.inputs[key].lineEdit()
@@ -2342,6 +2343,7 @@ class MusicEditorWindow(QMainWindow):
             return
         self._filename_clue_draft = None
         self._set_filename_clue_status("")
+        self._refresh_filename_clue_action()
 
     def _cancel_filename_clue_request(self):
         request_id = self._active_filename_clue_request_id
@@ -2368,7 +2370,7 @@ class MusicEditorWindow(QMainWindow):
 
     def _eligible_filename_clue_fields(self):
         path = self._filename_clue_target_path()
-        if not path:
+        if not path or self._filename_clue_draft is not None:
             return ()
         identity_values = [
             self.inputs[key].currentText().strip()

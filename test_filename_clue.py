@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import json
+import os
 import threading
 import unittest
 
@@ -51,6 +52,14 @@ class FilenameClueAnalysisTests(unittest.TestCase):
                 "disc": "",
             },
         )
+
+    def test_standalone_version_qualifier_keeps_complete_stem_as_title(self):
+        for filename in ("Song - Live.mp3", "Song - Remastered.flac"):
+            with self.subTest(filename=filename):
+                result = analyze_filename_clues(filename)
+
+                self.assertEqual(result.values["title"], os.path.splitext(filename)[0])
+                self.assertEqual(result.values["artist"], "")
 
     def test_deepseek_receives_only_filename_stem_and_fixed_contract(self):
         observed = {}
@@ -114,6 +123,31 @@ class FilenameClueAnalysisTests(unittest.TestCase):
         self.assertEqual(result.values["artist"], "Artist")
         self.assertEqual(result.values["title"], "Song")
         self.assertNotIn("AI title", result.values.values())
+
+    def test_duplicate_json_key_rejects_the_whole_deepseek_response(self):
+        def transport(**_kwargs):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '{"title":"Song","title":"Song","artist":"Artist",'
+                                '"album":"","track":"","disc":""}'
+                            ),
+                        }
+                    }
+                ]
+            }
+
+        result = analyze_filename_clues(
+            "Artist - Song.mp3",
+            api_key="configured",
+            transport=transport,
+        )
+
+        self.assertEqual(result.source, FilenameClueSource.LOCAL_RULES)
+        self.assertEqual(result.values["artist"], "Artist")
+        self.assertEqual(result.values["title"], "Song")
 
     def test_untraceable_character_rejects_deepseek_response(self):
         def transport(**_kwargs):

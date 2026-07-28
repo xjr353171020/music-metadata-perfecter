@@ -21,6 +21,19 @@ _DEEPSEEK_TIMEOUT_SECONDS = 15
 _LEADING_TRACK_PATTERN = re.compile(
     r"^\s*(?P<track>\d{1,3})\s+-\s+(?P<remainder>\S.*)$"
 )
+_STANDALONE_VERSION_QUALIFIER_PATTERN = re.compile(
+    r"^(?:"
+    r"live(?:\b.*)?|"
+    r"(?:\d{2,4}\s+)?remaster(?:ed)?(?:\b.*)?|"
+    r"acoustic(?:\b.*)?|"
+    r"instrumental(?:\b.*)?|"
+    r"demo(?:\b.*)?|"
+    r"radio\s+edit|"
+    r"extended\s+mix|"
+    r"mono|stereo"
+    r")$",
+    re.IGNORECASE,
+)
 _DEEPSEEK_SYSTEM_PROMPT = """\
 你只负责拆分一个 Windows 音乐文件名主体中明确存在的线索。
 只返回一个 JSON 对象，且必须恰好包含以下五个字符串键：
@@ -111,12 +124,24 @@ def _request_deepseek(*, payload, api_key, timeout):
     return response.json()
 
 
+def _json_object_without_duplicate_keys(pairs):
+    values = {}
+    for key, value in pairs:
+        if key in values:
+            raise ValueError("duplicate JSON key")
+        values[key] = value
+    return values
+
+
 def _validated_deepseek_values(response_data, stem):
     try:
         content = response_data["choices"][0]["message"]["content"]
         if not isinstance(content, str):
             return None
-        values = json.loads(content)
+        values = json.loads(
+            content,
+            object_pairs_hook=_json_object_without_duplicate_keys,
+        )
     except (KeyError, IndexError, TypeError, ValueError):
         return None
     if type(values) is not dict or set(values) != set(FILENAME_CLUE_FIELDS):
@@ -159,7 +184,11 @@ def _analyze_with_local_rules(stem: str) -> FilenameClueResult:
         remainder = track_match.group("remainder").strip()
 
     parts = remainder.split(" - ")
-    if len(parts) == 2 and all(part.strip() for part in parts):
+    if (
+        len(parts) == 2
+        and all(part.strip() for part in parts)
+        and not _STANDALONE_VERSION_QUALIFIER_PATTERN.fullmatch(parts[1].strip())
+    ):
         values["artist"] = parts[0].strip()
         values["title"] = parts[1].strip()
     elif len(parts) == 1:

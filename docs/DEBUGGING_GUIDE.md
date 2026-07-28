@@ -161,8 +161,9 @@ Debug filename clue drafts through the public `analyze_filename_clues()` result 
 
 - use a synthetic basename and an injected transport; never use a real private path, tag payload, cover, audio, or stored Key in a test;
 - verify the transport sees only the extension-free filename stem, fixed extraction instructions, `deepseek-chat`, JSON-object response mode, and a 15 s timeout;
-- verify the response has exactly `title`, `artist`, `album`, `track`, and `disc` string keys, and every non-empty value is an exact filename substring or an exact numeric token;
-- on any malformed, extra-key, wrong-type, out-of-range, or untraceable value, verify the complete DeepSeek result is discarded and local rules restart from the original stem;
+- verify the response has exactly one each of `title`, `artist`, `album`, `track`, and `disc` string keys, and every non-empty value is an exact filename substring or an exact numeric token;
+- on any malformed, duplicate-key, extra-key, wrong-type, out-of-range, or untraceable value, verify the complete DeepSeek result is discarded and local rules restart from the original stem;
+- verify standalone version qualifiers such as `Song - Live` and `Song - Remastered` remain complete title clues, and an active provenance record disables repeat analysis until it is cleared or fully persisted;
 - on cancellation, verify `SearchCancelled` reaches the worker so no local fallback, field update, status replacement, or undo command occurs;
 - at the window boundary, record request ID, active target path, emitted path, current selected path, blank/lock state, overlay lifetime, and undo count.
 

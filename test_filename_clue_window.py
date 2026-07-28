@@ -200,6 +200,31 @@ class FilenameClueWindowTests(unittest.TestCase):
         self.assertEqual(self.window.filename_clue_status_label.text(), "本地规则解析")
         self.assertEqual(self.window._filename_clue_generation, request_generation)
 
+    def test_active_filename_clue_draft_disables_repeat_analysis(self):
+        self._populate([("01 - Artist - Song.mp3", {})])
+        self._analyze_filename()
+        generation = self.window._filename_clue_generation
+        draft_values = dict(self.window._filename_clue_draft.field_values)
+
+        self.assertEqual(
+            self.window.filename_clue_status_label.text(),
+            "本地规则解析",
+        )
+        self.assertFalse(self.window.btn_filename_clue.isEnabled())
+
+        self.window.btn_filename_clue.click()
+        self.app.processEvents()
+
+        self.assertEqual(self.window._filename_clue_generation, generation)
+        self.assertEqual(
+            dict(self.window._filename_clue_draft.field_values),
+            draft_values,
+        )
+        self.assertEqual(
+            self.window.filename_clue_status_label.text(),
+            "本地规则解析",
+        )
+
     def test_action_is_disabled_for_complete_identity_or_multiple_selection(self):
         paths, items = self._populate(
             [
@@ -331,6 +356,7 @@ class FilenameClueWindowTests(unittest.TestCase):
 
         self.assertEqual(self.window.filename_clue_status_label.text(), "")
         self.assertIsNone(self.window._filename_clue_draft)
+        self.assertTrue(self.window.btn_filename_clue.isEnabled())
 
         self.window.perform_undo()
         self.assertEqual(self.window.inputs["title"].currentText(), "Song")
@@ -339,6 +365,7 @@ class FilenameClueWindowTests(unittest.TestCase):
             "本地规则解析",
         )
         self.assertIsNotNone(self.window._filename_clue_draft)
+        self.assertFalse(self.window.btn_filename_clue.isEnabled())
 
     def test_identity_dropdown_change_clears_source_and_undo_restores_it(self):
         self._populate([("Artist - Song.mp3", {})])
