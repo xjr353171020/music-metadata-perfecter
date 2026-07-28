@@ -7,3 +7,5 @@ Applying one filename clue draft is one atomic editor command even when it fills
 Filename analysis may fill an eligible empty editor field even when that field's save checkbox is clear, because the draft can still be used for review and Provider search. It must preserve every checkbox state: checkboxes express the user's save intent, which clue extraction is not authorized to change.
 
 The compact `DeepSeek解析` or `本地规则解析` indicator is visible only while the filename clue draft's title, artist, album, track, and disc values remain untouched by the user. Typing, choosing another value, or applying Provider data to any of those fields transitions the state to an ordinary editor draft and hides the indicator; undoing that change restores both the filename clue draft and its indicator.
+
+After saving, the indicator clears only when every remaining extracted value was written successfully and read back as loaded metadata. It remains visible when the target write fails or when an unchecked extracted field still differs from loaded metadata.
