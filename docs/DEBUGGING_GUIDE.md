@@ -354,6 +354,8 @@ Expected synchronization points:
 
 Temporary divergence is expected between unsaved widgets and loaded metadata. Divergence after a successful read-back or restored selection is not expected and should be fixed at that synchronization boundary.
 
+Provider searches intentionally build title, first artist, album, track, and disc arguments from `inputs`. Existing candidate red/green comparison also reads those current editor values and refreshes as they change. By contrast, `FetchWorker.local_metadata` is the Loaded metadata snapshot included only in raw debug output; do not substitute it for either query or comparison input.
+
 ## 9. Reproduction fixtures
 
 No committed audio fixture corpus exists. Current tests use in-memory taggers and generate short temporary MP3/FLAC files with `ffmpeg`. Build a small private/non-copyrighted corpus only when the task needs broader manual or integration reproduction; do not claim it is part of the repository.

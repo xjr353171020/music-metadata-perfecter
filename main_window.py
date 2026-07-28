@@ -1810,6 +1810,11 @@ class MusicEditorWindow(QMainWindow):
     def _connect_undo_capture(self):
         for key, combo in self.inputs.items():
             combo.currentTextChanged.connect(self._refresh_filename_clue_action)
+            combo.currentTextChanged.connect(
+                lambda _text, field=key: self._refresh_result_comparison_style(
+                    field
+                )
+            )
             combo.lineEdit().textEdited.connect(
                 lambda _text, field=key: self._record_user_editor_change(
                     f"撤销{field}编辑",
@@ -2037,6 +2042,7 @@ class MusicEditorWindow(QMainWindow):
             self.update_cover_display(snapshot.cover_is_mixed)
             for key, value in snapshot.result_values.items():
                 self.mb_inputs[key].setText(value)
+            self._refresh_result_comparison_styles()
             self._current_metadata_source = snapshot.selected_source
             self._set_available_sources(
                 getattr(self, "available_source_results", {}),
@@ -3193,22 +3199,24 @@ class MusicEditorWindow(QMainWindow):
 
     def _apply_result_comparison_style(self, key, new_value):
         line_edit = self.mb_inputs[key]
-        local_values = [
-            str(data.get(key, "") or "")
-            for data in self.album_session.selected_files_data.values()
-        ]
+        draft_values = self._editor_draft_comparison_values(key)
         base_style = "color: #34495e; padding: 6px; font-size: 10pt; border-radius: 4px;"
-        if not local_values:
+        if not draft_values:
             self._reset_result_field_style(line_edit)
             line_edit.setToolTip(new_value)
             return
 
-        ratios = [difflib.SequenceMatcher(None, value, new_value).ratio() for value in local_values]
-        is_exact = all(value == new_value for value in local_values)
+        ratios = [
+            difflib.SequenceMatcher(None, value, new_value).ratio()
+            for value in draft_values
+        ]
+        is_exact = all(value == new_value for value in draft_values)
         similarity = sum(ratios) / len(ratios)
         if is_exact:
             line_edit.setStyleSheet(f"QLineEdit {{ background-color: #d5f5e3; {base_style} border: 1px solid #27ae60; }}")
-            line_edit.setToolTip(f"本地信息完全一致\n本地: {local_values[0]}")
+            line_edit.setToolTip(
+                f"当前编辑完全一致\n当前编辑: {draft_values[0]}"
+            )
             return
 
         difference = 1.0 - similarity
@@ -3216,8 +3224,40 @@ class MusicEditorWindow(QMainWindow):
         blue = round(242 - 92 * difference)
         background = f"#ff{green:02x}{blue:02x}"
         line_edit.setStyleSheet(f"QLineEdit {{ background-color: {background}; {base_style} border: 1px solid #e57373; }}")
-        local_text = local_values[0] if len(set(local_values)) == 1 else "多首歌曲的本地值不同"
-        line_edit.setToolTip(f"本地: {local_text}\n字符相似度: {similarity:.0%}")
+        draft_text = (
+            draft_values[0]
+            if len(set(draft_values)) == 1
+            else "多首歌曲的当前保留值不同"
+        )
+        line_edit.setToolTip(
+            f"当前编辑: {draft_text}\n字符相似度: {similarity:.0%}"
+        )
+
+    def _editor_draft_comparison_values(self, key):
+        editor_value = self.inputs[key].currentText()
+        if editor_value == "<保留>":
+            return [
+                str(data.get(key, "") or "")
+                for data in self.album_session.selected_files_data.values()
+            ]
+        if editor_value == "<留白>":
+            return [""]
+        return [editor_value]
+
+    def _refresh_result_comparison_style(self, key):
+        line_edit = self.mb_inputs.get(key)
+        if line_edit is None:
+            return
+        candidate_value = line_edit.text()
+        if not candidate_value:
+            self._reset_result_field_style(line_edit)
+            line_edit.setToolTip("")
+            return
+        self._apply_result_comparison_style(key, candidate_value)
+
+    def _refresh_result_comparison_styles(self):
+        for key in self.mb_inputs:
+            self._refresh_result_comparison_style(key)
 
     @staticmethod
     def _reset_result_field_style(line_edit):

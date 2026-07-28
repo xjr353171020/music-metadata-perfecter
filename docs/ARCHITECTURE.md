@@ -124,7 +124,7 @@ Remaining coupling in `main_window.py` is real rather than merely line-count rel
 | `_editor_baseline` | Window | Replaced after selection/action | Mirrored last captured widget snapshot used to form undo commands |
 | `_selection_metadata_baseline` | Window | Replaced after selection/save/restore | Text/cover baseline used to warn before abandoning unsaved metadata edits |
 | `current_cover_data` | Window | Current selection/edit | Pending cover bytes or `None`; paired with `_cover_is_mixed` and `cover_modified_in_batch` |
-| `mb_inputs`, `available_source_results`, `_current_metadata_source` | Window | Current Provider result | Displayed candidate and source map; result-level source selection |
+| `mb_inputs`, `available_source_results`, `_current_metadata_source` | Window | Current Provider result | Displayed candidate and source map; result-level source selection; candidate comparison reads current `inputs` |
 | filename-clue draft state, status text, and request identity | Window | Current selection/editor/request | Frozen target/source/accepted-value provenance is captured in editor undo; searchable and saveable values themselves still live only in `inputs` |
 | `api_cache[path]` | Window | Until directory reload | Cached normalized Provider result, raw logs, and display strings |
 | `album_source_preferences[key]` | Window | Until directory reload | Preferred source per virtual/physical album identity |
@@ -138,6 +138,7 @@ Parallel-source risks:
 
 - `selected_files_data` is rebuilt on selection and explicitly refreshed for successful save/restore read-back affecting the current selection.
 - Widget edits are intentionally not copied into `all_files_data` until a successful write, except the existing lock-propagation path, which updates synchronized in-memory fields immediately.
+- Provider query arguments and candidate coloring read the current editor widgets. The `local_metadata` attached to raw debug output deliberately remains a Loaded metadata snapshot.
 - `api_cache` is per file and is not generally invalidated by a metadata save; source preference uses album plus cover identity and may change when those fields change.
 - Files changed outside the application make `all_files_data` stale until reload/read-back. Saved restore detects managed-field divergence only when undo is attempted.
 
@@ -155,7 +156,7 @@ Parallel-source risks:
 | Apple | `apple_music_api.search_apple_music()` | clues, MB artist identities, optional collection ID -> normalized Apple dict | Cooperative cancellation; 12 s requests; no live retry in this adapter |
 | Cross-source comparison | `metadata_api.search_metadata()` | successful source dicts -> one default dict plus `source_results` | Direct IDs override fuzzy choice; textual tie prefers MB; failure only if both fail |
 | Artist presentation | Apple adapter + resolver | Apple storefront variants + MB identities -> one existing artist/album-artist pair | Optional DeepSeek tie-break is a selector; its 15 s request lacks cancellation input |
-| Result display | window `_fill_mb_panel()` | selected normalized dict -> read-only fields and comparison styling | UI thread; Provider result remains a proposal, not local truth |
+| Result display | window `_fill_mb_panel()` | selected normalized dict -> read-only fields compared with current Editor draft | UI thread; styles refresh on editor changes; Provider result remains a proposal, not local truth |
 | User choice/edit | window | source button/field apply/manual combo edit/checkbox/lock/cover -> pending widget state | Editor undo snapshots changes; locked fields reject Provider application |
 | Save request | `_execute_save()` | widgets/session -> `SavePlanRequest` | `<preserve>` values are omitted; `<blank>` becomes empty string; no filesystem access |
 | Save planning | `build_save_plan()` | request -> immutable `SavePlan` of primary/sync items | Pure; no cancellation; request/session state is source |

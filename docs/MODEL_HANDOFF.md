@@ -52,6 +52,8 @@ The current automated suite is standard-library `unittest`. At the `2026.07.17.1
 
 `mb_api.py` and `apple_music_api.py` return a common metadata shape, while `metadata_api.py` performs comparable whole-source selection. Provider-specific search changes should stay in their adapter; cross-source changes belong only in the combiner.
 
+The window builds Provider identity arguments and candidate comparison styles from the current Editor draft. Multi-artist queries keep the existing first-artist rule, and multi-selection `<保留>` comparison expands to the selected Loaded metadata values. `FetchWorker.local_metadata` remains a debug-only Loaded metadata snapshot.
+
 ### Worker signal boundary
 
 Workers accept plain inputs, run off-thread, and emit plain outputs. Services remain Qt-free. Preserve signal argument contracts and identity-safe cleanup.
