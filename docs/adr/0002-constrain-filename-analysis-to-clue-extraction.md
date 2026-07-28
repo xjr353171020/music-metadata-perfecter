@@ -1,3 +1,7 @@
 # Constrain filename analysis to clue extraction
 
 Filename analysis, whether rule-based or DeepSeek-assisted, may only restructure evidence already present in the filename and must produce an unverified filename clue draft. It must not invent missing facts, act as a metadata source, or write tags directly; external reference sources provide candidate metadata, and the user remains responsible for accepting any values before they are saved. Because Windows filenames can be lossy, a filename clue draft may only fill empty identity fields and must preserve non-empty loaded metadata, existing unsaved edits, and locked fields.
+
+The only output fields are `title`, `artist`, `album`, `track`, and `disc`. A DeepSeek response must satisfy the complete fixed JSON contract and every returned value must be traceable to the filename; an extra field, malformed value, or unsupported transformation rejects the entire response. Rejected responses are never combined field by field with rule-based output.
+
+The deterministic fallback removes only the extension, recognizes an unambiguous leading track token, and uses a spaced ` - ` delimiter only when it yields a clear artist/title interpretation. Parenthetical text and qualifiers such as `Live` or `Remastered` remain intact. When a safe split is unavailable, the complete filename stem remains a title clue. Explicit track and disc digits retain their lexical form, including leading zeroes; absent totals or other numbers are never inferred.
