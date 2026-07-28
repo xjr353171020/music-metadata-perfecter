@@ -13,7 +13,7 @@ Verified separations:
 - `metadata_save_service.py` executes plans and restores managed snapshots without widget dependencies.
 - `AudioTagger` encapsulates MP3/FLAC tag interpretation and mutation.
 - `undo_manager.py` represents editor snapshots, session patches, managed snapshots, saved transactions, and history limits separately from Qt application.
-- `filename_clue.py` performs Qt-free, conservative filename evidence parsing; `FilenameClueWorker` carries its plain result back to the window.
+- `filename_clue.py` owns the Qt-free strict DeepSeek filename contract, evidence validation, cancellation checkpoints, and deterministic whole-result fallback; `FilenameClueWorker` carries its plain result back to the window.
 - MusicBrainz, Apple Music/iTunes, combined source comparison, and artist-name selection have distinct modules.
 - cooperative search cancellation is shared through `search_cancellation.py`.
 - directory scan, metadata fetch, save, restore, and cover download have dedicated workers. `FileLoaderWorker` uses up to four stable reader partitions, and `FileLoadProgressDialog` renders one progress lane for each active partition.
@@ -56,7 +56,7 @@ The current automated suite is standard-library `unittest`. At the `2026.07.17.1
 
 Workers accept plain inputs, run off-thread, and emit plain outputs. Services remain Qt-free. Preserve signal argument contracts and identity-safe cleanup.
 
-Filename clue analysis follows this boundary: the worker owns only basename/path/request data, while the window rechecks eligible blank fields and locks before applying one atomic editor mutation. The compact source text is reversible because it is part of `EditorStateSnapshot`; parsed metadata values are not duplicated outside the existing editor inputs.
+Filename clue analysis follows this boundary: the worker owns only basename, Key, path, request ID, transport, and cancellation event, while the window rechecks request/path identity, eligible blank fields, and locks before applying one atomic editor mutation. The analyzer makes at most one uncached 15 s DeepSeek call, accepts only a traceable fixed five-key response, and uses all-or-nothing local fallback. The compact source text is reversible because it is part of `EditorStateSnapshot`; parsed metadata values are not duplicated outside the existing editor inputs.
 
 ### Focused UI components
 
@@ -105,6 +105,10 @@ Load both editor snapshot application and filesystem restore. Preserve LIFO undo
 ### Cancellation and stale results
 
 Load worker cancel methods, Provider checkpoints, metadata/cover/filename-clue generation counters, active/cancelled IDs, completion early returns, and cleanup. Cancellation and stale-completion rejection are separate mechanisms. Loader/save/restore do not have the same contract.
+
+### Filename clue privacy and fallback
+
+Load `filename_clue.py`, its two dedicated test modules, the worker signal, and the window start/completion/cancel methods. Preserve the stem-only payload, exact five-string-key contract, lexical evidence checks, one-request/no-cache rule, whole-result fallback, and the distinction between transport failure and cancellation. Never log the Key, Authorization header, payload, full settings, or local path.
 
 ### Cover state
 
@@ -275,4 +279,4 @@ Documentation updated:
 
 ## 10. Current handoff summary
 
-Read `AGENTS.md` first, then the relevant architecture/debugging section and owning tests. Do not bypass `AlbumSession`, `SavePlan`, save/restore services, `AudioTagger`, `UndoManager`, workers, cooperative cancellation, or request-generation checks. Filename clues enter only through `filename_clue.py` and the existing editor inputs; they are not a Provider or a second metadata store. Treat `main_window.py`, album synchronization, Provider heuristics/storefront localization, partial save/restore, async identity, and cover flags as high-context areas. Treat `config.APP_VERSION` as the sole iteration/log version, use only current/previous-version logs for active debugging, and clean older logs after current evidence exists. Address the user in Simplified Chinese unless they explicitly request another language. When unsure, trace the value to its first incorrect state and escalate rather than creating a second path or patching the final symptom.
+Read `AGENTS.md` first, then the relevant architecture/debugging section and owning tests. Do not bypass `AlbumSession`, `SavePlan`, save/restore services, `AudioTagger`, `UndoManager`, workers, cooperative cancellation, or request-generation checks. Filename clues enter only through the strict `filename_clue.py` contract and the existing editor inputs; they are not a Provider or a second metadata store, and a rejected DeepSeek result is never mixed with local fields. Treat `main_window.py`, album synchronization, Provider heuristics/storefront localization, partial save/restore, async identity, and cover flags as high-context areas. Treat `config.APP_VERSION` as the sole iteration/log version, use only current/previous-version logs for active debugging, and clean older logs after current evidence exists. Address the user in Simplified Chinese unless they explicitly request another language. When unsure, trace the value to its first incorrect state and escalate rather than creating a second path or patching the final symptom.

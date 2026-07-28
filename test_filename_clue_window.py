@@ -1,13 +1,47 @@
 # -*- coding: utf-8 -*-
 import os
+import threading
 import time
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtCore import QThread, Qt, pyqtSignal
+from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
+from filename_clue import FilenameClueResult, FilenameClueSource
 from main_window import MusicEditorWindow
+
+
+class BlockingFilenameClueWorker(QThread):
+    finished_sig = pyqtSignal(object, str, int, bool)
+
+    def __init__(
+        self,
+        filename,
+        path,
+        request_id=0,
+        cancel_event=None,
+        parent=None,
+        **_kwargs,
+    ):
+        super().__init__(parent)
+        self.filename = filename
+        self.path = path
+        self.request_id = request_id
+        self.cancel_event = cancel_event or threading.Event()
+        self.started_event = threading.Event()
+
+    def cancel(self):
+        self.cancel_event.set()
+        self.requestInterruption()
+
+    def run(self):
+        self.started_event.set()
+        self.cancel_event.wait(2)
+        self.finished_sig.emit(None, self.path, self.request_id, True)
 
 
 class FilenameClueWindowTests(unittest.TestCase):
@@ -16,7 +50,14 @@ class FilenameClueWindowTests(unittest.TestCase):
         cls.app = QApplication.instance() or QApplication([])
 
     def setUp(self):
-        self.window = MusicEditorWindow(os.getcwd())
+        self.window = MusicEditorWindow(
+            os.getcwd(),
+            window_settings={
+                "MAIN_MUSIC_DIR": os.getcwd(),
+                "VIP_DOWNLOAD_DIR": "",
+                "DEEPSEEK_API_KEY": "",
+            },
+        )
         self.window.show()
 
     def tearDown(self):
@@ -183,6 +224,66 @@ class FilenameClueWindowTests(unittest.TestCase):
             self.window.filename_clue_status_label.text(),
             "未从文件名提取到可填线索",
         )
+        self.assertEqual(self.window.undo_manager.count, 0)
+
+    def test_escape_cancels_analysis_without_changing_the_editor(self):
+        self._populate([("Artist - Song.mp3", {})])
+
+        with patch("main_window.FilenameClueWorker", BlockingFilenameClueWorker):
+            self.window.btn_filename_clue.click()
+            worker = self.window.filename_clue_worker
+            self._wait_until(worker.started_event.is_set)
+            self.assertTrue(self.window.overlay.isVisible())
+            self.assertFalse(self.window.btn_save_only.isEnabled())
+            self.assertFalse(self.window.btn_fetch_auto.isEnabled())
+            QTest.keyClick(self.window, Qt.Key.Key_Escape)
+            was_cancelled = worker.cancel_event.is_set()
+            if not was_cancelled:
+                worker.cancel()
+            self.assertTrue(was_cancelled)
+            self._wait_until(
+                lambda: getattr(self.window, "filename_clue_worker", None) is None
+            )
+
+        self.assertEqual(self.window.inputs["title"].currentText(), "")
+        self.assertEqual(self.window.inputs["artist"].currentText(), "")
+        self.assertEqual(self.window.undo_manager.count, 0)
+        self.assertEqual(self.window.filename_clue_status_label.text(), "")
+        self.assertFalse(self.window.overlay.isVisible())
+        self.assertTrue(self.window.btn_save_only.isEnabled())
+
+    def test_stale_request_id_and_wrong_target_path_are_ignored(self):
+        paths, _items = self._populate([("Artist - Song.mp3", {})])
+        path = paths[0]
+        result = FilenameClueResult(
+            {
+                "title": "Song",
+                "artist": "Artist",
+                "album": "",
+                "track": "",
+                "disc": "",
+            },
+            FilenameClueSource.DEEPSEEK,
+        )
+        self.window._active_filename_clue_request_id = 2
+        self.window._active_filename_clue_path = path
+
+        self.window.on_filename_clue_analysis_finished(
+            result,
+            path,
+            1,
+            False,
+        )
+        self.assertEqual(self.window.inputs["title"].currentText(), "")
+        self.assertEqual(self.window._active_filename_clue_request_id, 2)
+
+        self.window.on_filename_clue_analysis_finished(
+            result,
+            os.path.join(os.getcwd(), "another.mp3"),
+            2,
+            False,
+        )
+        self.assertEqual(self.window.inputs["title"].currentText(), "")
         self.assertEqual(self.window.undo_manager.count, 0)
 
 

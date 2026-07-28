@@ -7,10 +7,7 @@ import re
 
 import requests
 
-from config import APP_SETTINGS
-
-
-DEEPSEEK_CHAT_URL = "https://api.deepseek.com/chat/completions"
+from config import APP_SETTINGS, DEEPSEEK_CHAT_URL
 _decision_cache = {}
 
 

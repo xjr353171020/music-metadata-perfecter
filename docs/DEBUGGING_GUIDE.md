@@ -155,6 +155,19 @@ For `cover_data`, record hashes and state flags rather than dumping bytes:
 
 Do not equate `current_cover_data is None` with explicit removal when `_cover_is_mixed` is true or `cover_modified_in_batch` is false.
 
+### Filename clue analysis
+
+Debug filename clue drafts through the public `analyze_filename_clues()` result and the window completion boundary:
+
+- use a synthetic basename and an injected transport; never use a real private path, tag payload, cover, audio, or stored Key in a test;
+- verify the transport sees only the extension-free filename stem, fixed extraction instructions, `deepseek-chat`, JSON-object response mode, and a 15 s timeout;
+- verify the response has exactly `title`, `artist`, `album`, `track`, and `disc` string keys, and every non-empty value is an exact filename substring or an exact numeric token;
+- on any malformed, extra-key, wrong-type, out-of-range, or untraceable value, verify the complete DeepSeek result is discarded and local rules restart from the original stem;
+- on cancellation, verify `SearchCancelled` reaches the worker so no local fallback, field update, status replacement, or undo command occurs;
+- at the window boundary, record request ID, active target path, emitted path, current selected path, blank/lock state, overlay lifetime, and undo count.
+
+Filename clue analysis has no cache and does not use Provider raw-debug logs. Do not add its payload, Authorization header, API Key, full settings, or local path to runtime/debug output.
+
 ## 4. Provider debugging
 
 ### Collect evidence
@@ -290,7 +303,7 @@ A change to an unmanaged custom tag is outside the managed fingerprint and shoul
 
 ## 7. Async debugging
 
-For UI blocking, first determine whether work is supposed to be asynchronous. Directory scanning, metadata search, cover fetch, save, and restore have workers. NCM conversion, audio move, `.lrc` deletion, settings/debug writes, and temporary cover opening currently run on the UI thread.
+For UI blocking, first determine whether work is supposed to be asynchronous. Directory scanning, filename clue analysis, metadata search, cover fetch, save, and restore have workers. NCM conversion, audio move, `.lrc` deletion, settings/debug writes, and temporary cover opening currently run on the UI thread.
 
 Worker checklist:
 
@@ -306,12 +319,12 @@ Worker checklist:
 10. Verify active ID and cancelled-ID cleanup for current and stale completions.
 11. Verify controls/overlay are restored only for the active completion.
 12. Verify `QThread.finished` invokes `deleteLater()` and identity-safe attribute clearing.
-13. Verify close behavior: cancel-and-ignore for search; block for save/restore.
+13. Verify close behavior: cancel-and-ignore for metadata, cover, and filename-clue work; block for save/restore.
 14. For cover requests, inspect four-attempt transient retry and cancelable backoff.
 15. For loaders, note there is no cancellation or generation guard; investigate overlapping reloads explicitly.
 16. The loader uses up to four stable reader partitions. Confirm that the dialog creates one progress lane per active partition, not per file, and that every lane reaches its own partition total.
 
-Relevant existing tests are in `test_application_undo_and_cancel.py`. They cover cooperative fetch/cover cancellation, Escape priority, stale metadata completion, and worker-adjacent UI behavior. They do not prove live HTTP cancellation or stale loader handling.
+Relevant existing tests are in `test_application_undo_and_cancel.py`, `test_filename_clue.py`, and `test_filename_clue_window.py`. They cover cooperative cancellation, Escape priority, stale completion, strict filename response fallback, and worker-adjacent UI behavior. They do not prove live HTTP cancellation or stale loader handling.
 
 ## 8. UI-state debugging
 

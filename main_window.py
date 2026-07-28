@@ -100,6 +100,7 @@ class MusicEditorWindow(QMainWindow):
         self._filename_clue_generation = 0
         self._active_filename_clue_request_id = None
         self._active_filename_clue_path = ""
+        self._cancelled_filename_clue_request_ids = set()
         self._search_buttons = []
         
         self.api_cache = {}
@@ -1306,6 +1307,7 @@ class MusicEditorWindow(QMainWindow):
             or self._undo_in_progress
             or self.is_metadata_search_running()
             or self.is_cover_search_running()
+            or self.is_filename_clue_analysis_running()
         ):
             return
         items = [item for item in self.file_list.selectedItems() if item.data(Qt.ItemDataRole.UserRole + 2) == "track"]
@@ -2020,6 +2022,9 @@ class MusicEditorWindow(QMainWindow):
     def perform_undo(self):
         if self._save_in_progress or self._undo_in_progress:
             return
+        if self.is_filename_clue_analysis_running():
+            self.cancel_active_search()
+            return
         command = self.undo_manager.peek()
         if command is None:
             return
@@ -2034,6 +2039,9 @@ class MusicEditorWindow(QMainWindow):
 
     def perform_redo(self):
         if self._save_in_progress or self._undo_in_progress:
+            return
+        if self.is_filename_clue_analysis_running():
+            self.cancel_active_search()
             return
         command = self.undo_manager.peek_redo()
         if command is None:
@@ -2264,12 +2272,17 @@ class MusicEditorWindow(QMainWindow):
         request_id = self._filename_clue_generation
         self._active_filename_clue_request_id = request_id
         self._active_filename_clue_path = target_path
-        self._set_filename_clue_status("")
         self.overlay.start()
         self.btn_filename_clue.setEnabled(False)
+        self._set_save_controls_enabled(False)
+        api_key = (
+            os.environ.get("DEEPSEEK_API_KEY", "").strip()
+            or str(self.window_settings.get("DEEPSEEK_API_KEY", "") or "").strip()
+        )
         self.filename_clue_worker = FilenameClueWorker(
             os.path.basename(target_path),
             target_path,
+            api_key=api_key,
             request_id=request_id,
             cancel_event=threading.Event(),
             parent=self,
@@ -2290,12 +2303,16 @@ class MusicEditorWindow(QMainWindow):
         cancelled,
     ):
         if request_id != self._active_filename_clue_request_id:
+            self._cancelled_filename_clue_request_ids.discard(request_id)
             return
+        was_cancelled = request_id in self._cancelled_filename_clue_request_ids
+        self._cancelled_filename_clue_request_ids.discard(request_id)
         self._active_filename_clue_request_id = None
         active_path = self._active_filename_clue_path
         self._active_filename_clue_path = ""
         if (
             cancelled
+            or was_cancelled
             or result is None
             or target_path != active_path
             or target_path != self._filename_clue_target_path()
@@ -2342,11 +2359,16 @@ class MusicEditorWindow(QMainWindow):
                 and not self.is_cover_search_running()
             ):
                 self.overlay.stop()
+            self._set_save_controls_enabled(True)
             self._refresh_filename_clue_action()
 
     def keyPressEvent(self, event):
         focus = QApplication.focusWidget()
-        if self._save_in_progress or self._undo_in_progress:
+        if (
+            self._save_in_progress
+            or self._undo_in_progress
+            or self.is_filename_clue_analysis_running()
+        ):
             event.accept()
             return
         if not isinstance(focus, QLineEdit):
@@ -2402,7 +2424,11 @@ class MusicEditorWindow(QMainWindow):
                 if self.cancel_active_search():
                     event.accept()
                     return True
-        if (self._save_in_progress or self._undo_in_progress) and belongs_to_this_window and event.type() in (
+        if (
+            self._save_in_progress
+            or self._undo_in_progress
+            or self.is_filename_clue_analysis_running()
+        ) and belongs_to_this_window and event.type() in (
             QEvent.Type.ShortcutOverride,
             QEvent.Type.KeyPress,
             QEvent.Type.KeyRelease,
@@ -2487,6 +2513,13 @@ class MusicEditorWindow(QMainWindow):
                 button.setEnabled(False)
             self.mb_status_label.setText("正在取消封面搜索...")
             self.mb_status_label.setStyleSheet("color: #e67e22; font-size: 12pt; font-weight: bold; padding: 5px;")
+            return True
+        if self.is_filename_clue_analysis_running():
+            request_id = self._active_filename_clue_request_id
+            if request_id is not None:
+                self._cancelled_filename_clue_request_ids.add(request_id)
+            self.filename_clue_worker.cancel()
+            self.btn_filename_clue.setEnabled(False)
             return True
         return False
 
@@ -2885,7 +2918,12 @@ class MusicEditorWindow(QMainWindow):
             )
 
     def do_fetch(self, mode, is_auto=False):
-        if self._save_in_progress or self._undo_in_progress or self.is_metadata_search_running():
+        if (
+            self._save_in_progress
+            or self._undo_in_progress
+            or self.is_metadata_search_running()
+            or self.is_filename_clue_analysis_running()
+        ):
             return
         self.is_auto_fetch = is_auto 
         items = [item for item in self.file_list.selectedItems() if item.data(Qt.ItemDataRole.UserRole + 2) == "track"]
@@ -3166,14 +3204,23 @@ class MusicEditorWindow(QMainWindow):
         ):
             event.ignore()
             return
-        if self.is_metadata_search_running() or self.is_cover_search_running():
+        if (
+            self.is_metadata_search_running()
+            or self.is_cover_search_running()
+            or self.is_filename_clue_analysis_running()
+        ):
             self.cancel_active_search()
             event.ignore()
             return
         super().closeEvent(event)
 
     def skip_current_files(self):
-        if self._save_in_progress or self._undo_in_progress or self.is_metadata_search_running():
+        if (
+            self._save_in_progress
+            or self._undo_in_progress
+            or self.is_metadata_search_running()
+            or self.is_filename_clue_analysis_running()
+        ):
             return
         items = [item for item in self.file_list.selectedItems() if item.data(Qt.ItemDataRole.UserRole + 2) == "track"]
         for item in items:
@@ -3198,7 +3245,12 @@ class MusicEditorWindow(QMainWindow):
         self._execute_save(apply_mb=False, advance=False)
 
     def _execute_save(self, apply_mb=True, advance=True):
-        if self._save_in_progress or self._undo_in_progress or self.is_metadata_search_running():
+        if (
+            self._save_in_progress
+            or self._undo_in_progress
+            or self.is_metadata_search_running()
+            or self.is_filename_clue_analysis_running()
+        ):
             return
         items = [item for item in self.file_list.selectedItems() if item.data(Qt.ItemDataRole.UserRole + 2) == "track"]
         if not items:
@@ -3286,7 +3338,9 @@ class MusicEditorWindow(QMainWindow):
         for button in (self.btn_skip, self.btn_save_apply, self.btn_save_only):
             button.setEnabled(enabled)
         search_enabled = enabled and not (
-            self.is_metadata_search_running() or self.is_cover_search_running()
+            self.is_metadata_search_running()
+            or self.is_cover_search_running()
+            or self.is_filename_clue_analysis_running()
         )
         for button in self._search_buttons:
             button.setEnabled(search_enabled)

@@ -93,32 +93,37 @@ class FilenameClueWorker(QThread):
         self,
         filename,
         path,
+        api_key="",
         request_id=0,
         cancel_event=None,
+        transport=None,
         parent=None,
     ):
         super().__init__(parent)
         self.filename = filename
         self.path = path
+        self.api_key = api_key
         self.request_id = request_id
         self.cancel_event = cancel_event or threading.Event()
+        self.transport = transport
 
     def cancel(self):
         self.cancel_event.set()
         self.requestInterruption()
 
     def run(self):
-        if self.cancel_event.is_set():
+        try:
+            result = analyze_filename_clues(
+                self.filename,
+                api_key=self.api_key,
+                transport=self.transport,
+                cancel_event=self.cancel_event,
+            )
+            check_cancelled(self.cancel_event)
+        except SearchCancelled:
             self.finished_sig.emit(None, self.path, self.request_id, True)
             return
-        result = analyze_filename_clues(self.filename)
-        cancelled = self.cancel_event.is_set()
-        self.finished_sig.emit(
-            None if cancelled else result,
-            self.path,
-            self.request_id,
-            cancelled,
-        )
+        self.finished_sig.emit(result, self.path, self.request_id, False)
 
 
 class FileLoaderWorker(QThread):

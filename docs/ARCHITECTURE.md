@@ -11,7 +11,7 @@ External data sources are:
 - MusicBrainz Web Service 2 (`release`, `recording`, and `artist` requests);
 - Apple iTunes Search/Lookup APIs, used as the Apple Music metadata/storefront adapter;
 - Cover Art Archive release artwork;
-- optional DeepSeek `deepseek-chat`, used only to choose among existing Apple artist-name candidates.
+- optional DeepSeek `deepseek-chat`, used either to choose among existing Apple artist-name candidates or, after a separate explicit action, to structure evidence already present in one filename stem.
 
 The architectural style is a Qt window coordinator around extracted data, rule, service, adapter, and worker modules. The code is already modular around session state, save planning, filesystem execution, tag formats, undo data, Provider adapters, cancellation, background work, cover fetching, and reusable widgets. `main_window.py` remains centralized because it coordinates widget state, selection, caches, worker lifecycles, source choice, save/undo presentation, and local workflows. This is not an MVC/MVVM or dependency-injection architecture, and it should not be rewritten as one without a concrete need.
 
@@ -65,7 +65,7 @@ For development without VS Code, the supported machine-local entry point is the 
 | `metadata_save_service.py` | `MetadataSaveService`, `MetadataRestoreService`, result DTOs; snapshot, execute, read back, conflict-check | `audio_tagger`, `save_plan`, `undo_manager` | Widget state, Provider logic | High |
 | `audio_tagger.py` | `AudioTagger`; MP3 ID3 and FLAC read/update/exact managed restore | Mutagen; optional Pillow | UI, album sync, Provider matching | High |
 | `undo_manager.py` | Editor/saved snapshots, `SessionPatch`, saved transactions, LIFO undo/redo stacks and limits | stdlib only | Applying widgets or writing files | High |
-| `filename_clue.py` | `analyze_filename_clues()`; conservative filename-stem parsing into a five-field `FilenameClueResult` | stdlib only | Qt, network, Provider matching, tag writes | Medium |
+| `filename_clue.py` | `analyze_filename_clues()`; strict DeepSeek filename contract, evidence validation, cancellation checkpoints, and deterministic whole-result fallback | stdlib, `requests`, `config`, cancellation | Qt, Provider matching, tag writes, caches | High |
 | `metadata_api.py` | Run both Providers, normalize cross-source scores, select a default, retain both results | Provider adapters, cancellation | UI, tag writing | High |
 | `mb_api.py` | MusicBrainz release/recording/artist requests, matching, identities, caches, pacing | `requests`, `config`, cancellation | UI, Apple rules, tag writes | High |
 | `apple_music_api.py` | iTunes collection/track search, storefront strategy, matching, localization calls, caches | `requests`, MB similarity helpers, resolver, cancellation | UI, tag writes | High |
@@ -149,6 +149,7 @@ Parallel-source risks:
 | Tag read | `AudioTagger.read_tags()` | ID3/Vorbis/Picture tags -> normalized metadata dict | Returns empty defaults and prints format read errors; file is source |
 | Loaded state | `on_load_finished()` / `AlbumSession` | worker dict -> `all_files_data`, sortable list | UI thread; in-memory dict becomes current window truth |
 | Selection | `MusicEditorWindow` | selected paths -> `selected_files_data`, mixed/single combo values, cover state | Reads file directly only if path absent from loaded state; selection view is derived |
+| Filename clue draft | `FilenameClueWorker` + `filename_clue.py` + window | explicit single-track basename -> optional DeepSeek five-field result or deterministic local result -> blank unlocked editor fields | One uncached 15 s request at most; strict rejection falls back as a whole; cancellation does not fall back; editor remains source for pending values |
 | Search request | `do_fetch()` | first selected path plus visible title/artist/album/track/disc and optional IDs -> `FetchWorker` arguments | UI validates required title/track clues; first selected item supplies local debug metadata |
 | MusicBrainz | `mb_api.search_mb()` | local clues/MBID -> normalized MB dict, raw records | Cooperative cancellation; 10 s requests, paced waits; release track titles override shared recording titles, and artist credits use the application multi-value separator |
 | Apple | `apple_music_api.search_apple_music()` | clues, MB artist identities, optional collection ID -> normalized Apple dict | Cooperative cancellation; 12 s requests; no live retry in this adapter |
@@ -339,20 +340,20 @@ Restore runs in `RestoreWorker`. Successful paths update `all_files_data`, are r
 | --- | --- | --- | --- |
 | `FileLoaderWorker` | directory | progress `(current,total,filename)`, finished `(sortable,data)` | No cancellation or request generation |
 | `FetchWorker` | local clues, IDs, local metadata, request ID/event | progress text; finished `(success,data,raw,msg,path,id,cancelled)` | Event + `requestInterruption`; Provider checkpoints; window ID rejection |
-| `FilenameClueWorker` | one basename, target path, request ID/event | finished `(result,path,id,cancelled)` | Plain Qt-free result; window rechecks request ID, path, current blanks, and locks |
+| `FilenameClueWorker` | one basename, API key, target path, request ID/event | finished `(result,path,id,cancelled)` | Analyzer checks cancellation before/after the optional blocking request; window rechecks request ID, path, current blanks, and locks |
 | `CoverFetchWorker` | artist, album, release/artwork identity, request ID/event | progress text; finished `(images,stats,raw,id,cancelled)` | Event + interruption; retry waits are cancelable; window ID rejection |
 | `SaveWorker` | immutable `SavePlan`, service | item progress, result/failure | No cancellation; close is blocked while running |
 | `RestoreWorker` | transaction changes, service | item progress, result/failure | No cancellation; close is blocked while running |
 
 All workers are `QThread` subclasses. They own plain inputs and emit plain results; they do not access widgets. `MetadataSaveService` and `MetadataRestoreService` are Qt-free and report progress through callbacks that workers convert to signals. UI updates happen in connected window slots.
 
-Metadata/cover cancellation sets a `threading.Event`, calls `requestInterruption()`, marks the active request ID as cancelled, and disables search controls until completion. Provider code checks the event before/after network calls and inside loops; MB pacing and cover retry waits are event-aware. A blocking HTTP call can only observe cancellation after it returns or times out. The DeepSeek tie-break request has no cancellation argument.
+Metadata/cover/filename-clue cancellation sets a `threading.Event`, calls `requestInterruption()`, marks the active request ID as cancelled, and disables conflicting controls until completion. Provider code checks the event before/after network calls and inside loops; MB pacing and cover retry waits are event-aware. Filename analysis checks before and after its single DeepSeek call, so `Esc` prevents fallback or editor mutation but a blocking request can only return control after response or its 15 s timeout. The artist-name DeepSeek tie-break request remains separate and has no cancellation argument.
 
-Stale-result prevention is separate: `_metadata_search_generation` and `_cover_search_generation` monotonically assign IDs; completion slots return immediately unless the ID equals the active ID. Cancelled IDs also prevent a cancellation race from being displayed as failure. Metadata and cover searches have separate generations and cancelled-ID sets. Progress signals do not carry IDs, so their safety depends on only one same-kind worker being active and cancelled fetch progress being suppressed.
+Stale-result prevention is separate: metadata, cover, and filename-clue generations monotonically assign IDs; completion slots return immediately unless the ID equals the active ID. Cancelled IDs also prevent a cancellation race from being displayed as failure. Filename completion additionally requires both its emitted path and the currently selected path to equal the active target. Progress signals do not carry IDs, so metadata/cover progress safety depends on only one same-kind worker being active and cancelled fetch progress being suppressed.
 
 MusicBrainz and Apple metadata acquisition are sequential within one worker, not parallel. Auxiliary NCM conversion, audio moves, lyric deletion, settings writes, debug-log export, and temporary cover-file writes still execute synchronously on the UI thread.
 
-Filename clue analysis is a separate explicit single-track action. The current Qt-free entry performs only deterministic local parsing; the window writes accepted non-empty values into blank, unlocked editor fields through one `_record_editor_mutation()` command. It preserves checkbox state and does not invoke Provider search, `SavePlan`, or tag writes.
+Filename clue analysis is a separate explicit single-track action. With a configured key, the Qt-free entry sends only the filename stem, fixed five-key schema, and extraction constraints to `deepseek-chat`; it does not send directory paths, tags, covers, audio, or settings. Any malformed, extra-key, wrong-type, out-of-range, or lexically untraceable response is discarded in full before deterministic local parsing starts from the original stem. There is no retry or cache. The window writes accepted non-empty values into blank, unlocked editor fields through one `_record_editor_mutation()` command, preserves checkbox state, and does not invoke Provider search, `SavePlan`, or tag writes.
 
 Worker cleanup connects `QThread.finished` to a slot that calls `deleteLater()` and clears the stored worker only if identities match. Closing during a search requests cancellation and ignores that close event; closing during save/restore is simply ignored until completion.
 
@@ -538,7 +539,7 @@ These helpers currently run synchronously under a wait cursor, so large operatio
 
 **Where:** workers, `search_cancellation.py`, window request IDs, DeepSeek call, loader
 
-**Why it exists:** HTTP calls block until timeout; only metadata/cover completions carry generations.
+**Why it exists:** HTTP calls block until timeout; metadata, cover, and filename-clue operations have distinct generations and cancellation timing.
 
 **Failure mode:** Cancellation appears slow, old UI progress leaks, or overlapping directory loads overwrite state.
 
