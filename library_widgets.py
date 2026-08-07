@@ -5,6 +5,8 @@ from PyQt6.QtCore import QAbstractAnimation, QEvent, QEasingCurve, QPoint, QProp
 from PyQt6.QtGui import QColor, QPainter, QPolygon
 from PyQt6.QtWidgets import QComboBox, QLabel, QListWidget, QWidget
 
+from theme import theme_color
+
 
 class TouchComboBox(QComboBox):
     """Editable combo box with a consistently visible high-DPI drop-down arrow."""
@@ -13,7 +15,9 @@ class TouchComboBox(QComboBox):
         super().paintEvent(event)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        color = QColor("#7f8c8d") if not self.isEnabled() else QColor("#34495e")
+        color = QColor(
+            theme_color("text_muted" if not self.isEnabled() else "text")
+        )
         center_x = self.width() - 14
         center_y = self.height() // 2 + 1
         painter.setPen(Qt.PenStyle.NoPen)
@@ -224,7 +228,7 @@ class AlbumIndexLetter(QLabel):
 
     def set_available(self, available):
         self.is_available = available
-        color = "#2980b9" if available else "#bdc3c7"
+        color = theme_color("accent" if available else "border")
         weight = "bold" if available else "normal"
         self.setStyleSheet(
             "QLabel {"

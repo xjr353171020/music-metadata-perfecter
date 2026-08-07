@@ -72,6 +72,21 @@ AudioTagger.read_tags()
 
 Fix the first incorrect transformation. Remember that a target lock blocks dependent synchronization but does not block a checked direct primary write.
 
+### Windows 11 theme checks
+
+For dark-mode reports, verify the app preference rather than relying on a window
+label or a stale screenshot:
+
+- read `AppsUseLightTheme` under the Windows `Personalize` registry key (`0` is dark);
+- inspect `QApplication.palette()` and `QApplication.property("music_metadata_theme")`;
+- check a representative local stylesheet and a list header colour after toggling;
+- change the Windows app theme while the process remains open and wait for the
+  controller refresh before taking the comparison screenshot.
+
+`theme.py` owns this presentation behavior. Do not change metadata/session code to
+fix a colour-only defect. DWM title-bar application is best-effort and may be
+unavailable in offscreen tests or remote sessions.
+
 ### Example: old search result replaces a new result
 
 Bad approach:

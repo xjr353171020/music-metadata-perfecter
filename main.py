@@ -18,15 +18,14 @@ def main():
 
     from main_window import MusicEditorWindow
     from mb_api import init_mb_api
+    from theme import apply_theme
 
     init_mb_api()
 
     app = QApplication(sys.argv)
     app.setWindowIcon(QIcon(APP_ICON_PATH))
-    
-    # 【终极防线】：使用 StyleSheet 全局覆盖所有可能发生隐式调用的控件字体
-    # 这样就算某个阴暗角落的组件获取不到 pointSize，CSS 也会强制赋予它 10pt (约 13px)
-    app.setStyleSheet("* { font-family: 'Microsoft YaHei', 'Segoe UI'; font-size: 10pt; }")
+    # 跟随 Windows 11 的应用深色模式，并让后续动态创建的对话框继承主题。
+    apply_theme(app)
     
     music_dir = APP_SETTINGS.get("MAIN_MUSIC_DIR", r"E:\CloudMusic")
     window = MusicEditorWindow(music_dir)

@@ -41,6 +41,7 @@ from cover_gallery import CoverGalleryDialog
 from cover_fetch_worker import CoverFetchWorker
 from audio_player_widget import AudioPlayerWidget
 from library_widgets import AlbumIndexLetter, FileListOverlayContainer, TouchComboBox, TouchSafeFileList
+from theme import theme_color
 from undo_manager import (
     CursorState,
     EditorStateSnapshot,
@@ -148,6 +149,11 @@ class MusicEditorWindow(QMainWindow):
         self.mb_labels = {}
         
         self.init_ui()
+        self._theme_controller = getattr(
+            QApplication.instance(), "_music_metadata_theme_controller", None
+        )
+        if self._theme_controller is not None:
+            self._theme_controller.theme_changed.connect(self._on_theme_changed)
         self._search_restore_timer = QTimer(self)
         self._search_restore_timer.setSingleShot(True)
         self._search_restore_timer.setInterval(40)
@@ -161,6 +167,20 @@ class MusicEditorWindow(QMainWindow):
         
         self.paste_shortcut = QShortcut(QKeySequence("Ctrl+V"), self)
         self.paste_shortcut.activated.connect(self.paste_cover_from_clipboard)
+
+    def _on_theme_changed(self, _mode):
+        """Refresh colours stored directly on list items after a theme switch."""
+        if not hasattr(self, "file_list"):
+            return
+        for item in self._header_item_cache.values():
+            if self.file_list.row(item) < 0:
+                continue
+            mark_modified = bool(item.data(Qt.ItemDataRole.UserRole + 6))
+            item.setForeground(
+                QColor(theme_color("purple" if mark_modified else "text_muted"))
+            )
+            item.setBackground(QColor(theme_color("header_surface")))
+        self._update_album_index()
 
     def start_initial_load(self):
         if self._initial_load_scheduled:
@@ -1204,8 +1224,8 @@ class MusicEditorWindow(QMainWindow):
         if item is None:
             item = QListWidgetItem()
             item.setFlags(Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled)
-            item.setForeground(QColor("#7f8c8d"))
-            item.setBackground(QColor("#f4f6f7"))
+            item.setForeground(QColor(theme_color("text_muted")))
+            item.setBackground(QColor(theme_color("header_surface")))
             font = item.font()
             font.setPointSize(9)
             font.setBold(True)
@@ -1216,7 +1236,9 @@ class MusicEditorWindow(QMainWindow):
         item.setData(Qt.ItemDataRole.UserRole + 3, header_id)
         item.setData(Qt.ItemDataRole.UserRole + 5, index_album_name)
         item.setData(Qt.ItemDataRole.UserRole + 6, mark_modified)
-        item.setForeground(QColor("#8e44ad" if mark_modified else "#7f8c8d"))
+        item.setForeground(
+            QColor(theme_color("purple" if mark_modified else "text_muted"))
+        )
         item.setToolTip(
             "专辑名称已修改；本次会话保持原列表位置。"
             if mark_modified else ""
@@ -2866,7 +2888,9 @@ class MusicEditorWindow(QMainWindow):
             header.setText(f"💿 {album}")
             header.setData(Qt.ItemDataRole.UserRole + 5, album)
             header.setData(Qt.ItemDataRole.UserRole + 6, mark_modified)
-            header.setForeground(QColor("#8e44ad" if mark_modified else "#7f8c8d"))
+            header.setForeground(
+                QColor(theme_color("purple" if mark_modified else "text_muted"))
+            )
             header.setToolTip(
                 "专辑名称已修改；本次会话保持原列表位置。"
                 if mark_modified else ""
@@ -3721,8 +3745,10 @@ class MusicEditorWindow(QMainWindow):
         is_locked = self.lock_btns[key].isChecked()
         base_style = self.cb_style_locked if is_locked else self.cb_style_normal
         animation = QVariantAnimation(widget)
-        animation.setStartValue(QColor("#c9f3d2"))
-        animation.setEndValue(QColor("#e8f4f8") if is_locked else QColor("#ffffff"))
+        animation.setStartValue(QColor(theme_color("success_surface")))
+        animation.setEndValue(
+            QColor(theme_color("info_surface" if is_locked else "input"))
+        )
         animation.setDuration(520)
         animation.setEasingCurve(QEasingCurve.Type.OutCubic)
 

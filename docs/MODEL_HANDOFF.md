@@ -18,6 +18,7 @@ Verified separations:
 - cooperative search cancellation is shared through `search_cancellation.py`.
 - directory scan, metadata fetch, save, restore, and cover download have dedicated workers. `FileLoaderWorker` uses up to four stable reader partitions, and `FileLoadProgressDialog` renders one progress lane for each active partition.
 - cover gallery, library/touch widgets, dialogs, album initials, and audio preview are extracted reusable UI units.
+- `theme.py` owns Windows app-theme detection, palette/QSS presentation, best-effort dark title bars, and live light/dark switching; it does not own metadata or workflow state.
 - `config.APP_NAME` is the single product name used by window titles, startup logs, and the `Music Metadata Perfecter` desktop shortcut. `config.APP_VERSION` is the single release/log identifier; runtime, metadata-search, and cover-search logs use it consistently.
 - `main.py` captures stdout/stderr and uncaught exception tracebacks in a versioned daily runtime log, including when launched from the machine-local desktop/Listary shortcut.
 
@@ -63,6 +64,11 @@ Filename clue analysis follows this boundary: the worker owns only basename, Key
 ### Focused UI components
 
 `library_widgets.py`, `cover_gallery.py`, `audio_player_widget.py`, `album_initials.py`, and dialogs are appropriately narrow. Styling/interaction fixes can usually remain local if they do not change metadata behavior.
+
+Theme changes should go through `theme.py`. Widget-local light styles are retained
+as source strings and translated by the controller only in dark mode; direct
+`QListWidgetItem` colours should use `theme_color()` and refresh from
+`theme_changed` rather than reading the Windows registry in a widget.
 
 The fixed amber pending-field dots are non-interactive labels owned by the window. Their state is derived from the checked Editor draft value and selected Loaded metadata under direct primary-save semantics; `<保留>` and unchecked fields stay off, `<留白>` means empty, locks are ignored, and dependent synchronization is out of scope. They are not stored in `EditorStateSnapshot`.
 

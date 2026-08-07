@@ -28,7 +28,7 @@ main.py
   -> set Qt high-DPI environment variables
   -> QApplication(sys.argv)
   -> apply bundled application icon
-  -> install global Microsoft YaHei/Segoe UI stylesheet
+  -> apply Windows app-theme palette, stylesheet, and dark title-bar handling
   -> APP_SETTINGS["MAIN_MUSIC_DIR"] or fallback
   -> MusicEditorWindow(music_dir)
        -> create AlbumSession, UndoManager, caches, request counters
@@ -57,7 +57,7 @@ For development without VS Code, the supported machine-local entry point is the 
 
 | Module | Responsibility and important API | Allowed dependencies | Prohibited responsibility | Risk |
 | --- | --- | --- | --- | --- |
-| `main.py` | Process entry point, runtime stream/exception logging, Qt/DPI setup, first window | `config`, `mb_api`, `main_window`, Qt | Metadata rules or I/O workflows | Low |
+| `main.py` | Process entry point, runtime stream/exception logging, Qt/DPI setup, theme setup, first window | `config`, `mb_api`, `main_window`, `theme`, Qt | Metadata rules or I/O workflows | Low |
 | `config.py` | Application path, `APP_NAME`, `APP_VERSION`, `settings.json`, `APP_SETTINGS` | stdlib | UI, Provider logic, tag writes | Medium: import-time mutable config |
 | `main_window.py` | `MusicEditorWindow`; UI construction, selection/editor coordination, worker lifecycle, source choice, save/undo reporting | All feature modules and Qt | New Provider algorithms, tag encoding, save/restore rules | High |
 | `album_session.py` | `AlbumSession`; loaded/selected metadata, virtual groups, locks, sync keys | stdlib only | Qt, network, filesystem mutation | Medium |
@@ -75,6 +75,7 @@ For development without VS Code, the supported machine-local entry point is the 
 | `cover_fetch_worker.py` | `CoverFetchWorker`; Apple/CAA artwork requests, retry, cancellation, debug stats | Qt, `requests`; delayed MB similarity import | Gallery UI, tag persistence | High |
 | `cover_gallery.py` | `CoverGalleryDialog`; display candidates and return selected bytes | Qt | Network or tag writes | Low |
 | `library_widgets.py` | Touch-safe list/combo/index widgets and smooth scrolling | Qt | Metadata/session rules | Low |
+| `theme.py` | Windows app-theme detection, palette/QSS application, local-style translation, native title-bar mode | Qt, Windows registry/DWM when available | Metadata, Provider, filesystem, session rules | Medium: presentation-wide behavior |
 | `ui_components.py` | Loading, settings, versioned raw-debug/export dialogs | Qt, `config` | Provider matching or save rules | Medium: writes debug logs/settings |
 | `audio_player_widget.py` | `AudioPlayerWidget`; Qt playback and Mutagen duration read | Qt Multimedia, Mutagen | Metadata mutation | Low |
 | `album_initials.py` | Cross-script album initial/sort key | optional `pypinyin`, `pykakasi` | UI/session mutation | Low |
@@ -104,10 +105,23 @@ Reusable components are deliberately narrow:
 - `library_widgets.py`: touch/wheel/list/index behavior only;
 - `cover_gallery.py`: choose one downloaded byte payload;
 - `audio_player_widget.py`: preview only;
+- `theme.py`: process-wide presentation palette and Windows 11 app-theme follow-up;
 - `ui_components.py`: loading, settings, and raw-debug dialogs;
 - `album_initials.py`: deterministic navigation labels.
 
 Remaining coupling in `main_window.py` is real rather than merely line-count related: editor widgets mirror session metadata; source preferences depend on album identity; save completion updates session, list, undo, and navigation; cover search can chain from metadata search; and undo re-applies both widget and selected session patches. Any extraction must preserve one state owner and these signal boundaries.
+
+### Theme behavior
+
+`main.py` creates a `ThemeController` before the first window. On Windows it reads
+`HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize\\AppsUseLightTheme`
+(`0` means dark), applies a matching `QPalette` and fallback stylesheet, and asks
+DWM for a dark title bar when available. The controller listens for Qt's
+`colorSchemeChanged` signal and polls the same preference so a running window
+follows later Windows 11 theme changes. Existing widget-local styles are retained
+as light-source strings and translated only for dark presentation; switching back
+restores those original strings. Non-CSS list colours use semantic colours from
+`theme.py` and are refreshed through the controller's `theme_changed` signal.
 
 ## 5. Session and editor state
 

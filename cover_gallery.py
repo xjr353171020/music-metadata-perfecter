@@ -2,8 +2,13 @@
 """UI for selecting a downloaded album cover."""
 
 from PyQt6.QtCore import QSize, Qt
-from PyQt6.QtGui import QIcon, QImage, QPixmap
-from PyQt6.QtWidgets import QDialog, QLabel, QListWidget, QListWidgetItem, QScroller, QVBoxLayout
+from PyQt6.QtGui import QColor, QIcon, QImage, QPixmap
+from PyQt6.QtWidgets import QApplication, QDialog, QLabel, QListWidget, QListWidgetItem, QScroller, QVBoxLayout
+
+from theme import get_theme_controller, theme_color
+
+
+_HIGH_RESOLUTION_ROLE = Qt.ItemDataRole.UserRole + 1
 
 
 class CoverGalleryDialog(QDialog):
@@ -14,6 +19,9 @@ class CoverGalleryDialog(QDialog):
         self.setWindowTitle("🎨 智能封面画廊 (双击应用)")
         self.resize(800, 650)
         self.selected_data = None
+        self._theme_controller = get_theme_controller(QApplication.instance())
+        if self._theme_controller is not None:
+            self._theme_controller.theme_changed.connect(self._on_theme_changed)
 
         layout = QVBoxLayout(self)
         status_text = f"🍎 Apple Music: {stats.get('am', '未知')}    |    🌍 MusicBrainz: {stats.get('mb', '未知')}"
@@ -41,7 +49,8 @@ class CoverGalleryDialog(QDialog):
             item = QListWidgetItem(QIcon(QPixmap.fromImage(image)), f"{item_data['source']}\n物理分辨率: {width} x {height}")
             item.setData(Qt.ItemDataRole.UserRole, image_data)
             if width >= 1000:
-                item.setForeground(Qt.GlobalColor.darkGreen)
+                item.setData(_HIGH_RESOLUTION_ROLE, True)
+                item.setForeground(QColor(theme_color("success")))
                 font = item.font()
                 font.setBold(True)
                 item.setFont(font)
@@ -54,6 +63,12 @@ class CoverGalleryDialog(QDialog):
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
         hint.setStyleSheet("color: #7f8c8d; font-weight: bold;")
         layout.addWidget(hint)
+
+    def _on_theme_changed(self, _mode):
+        for index in range(self.list_widget.count()):
+            item = self.list_widget.item(index)
+            if item.data(_HIGH_RESOLUTION_ROLE):
+                item.setForeground(QColor(theme_color("success")))
 
     def on_item_double_clicked(self, item):
         self.selected_data = item.data(Qt.ItemDataRole.UserRole)
