@@ -15,9 +15,9 @@ from PyQt6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QMessageBox, QSplitter, QAbstractItemView, QLineEdit, QApplication, 
                              QCheckBox, QScroller, QGroupBox, QSizePolicy, QFrame, QScrollArea,
                              QProgressDialog, QDialog, QDialogButtonBox, QPlainTextEdit, QToolButton)
-from PyQt6.QtGui import QPixmap, QKeySequence, QShortcut, QColor, QFontMetrics
+from PyQt6.QtGui import QImage, QPixmap, QKeySequence, QShortcut, QColor, QFontMetrics
 from PyQt6.QtCore import (
-    Qt, QByteArray, QBuffer, QIODevice, QTimer, QPropertyAnimation,
+    Qt, QByteArray, QBuffer, QIODevice, QMimeData, QTimer, QPropertyAnimation,
     QEasingCurve, QEvent, QVariantAnimation,
 )
 
@@ -54,6 +54,9 @@ from undo_manager import (
     StoredValue,
     UndoManager,
 )
+
+
+COVER_CLIPBOARD_MIME_TYPE = "application/x-music-metadata-perfecter-cover"
 
 
 # =========================================================================
@@ -1516,12 +1519,30 @@ class MusicEditorWindow(QMainWindow):
     def copy_cover_to_clipboard(self):
         if self.current_cover_data:
             pixmap = QPixmap()
-            pixmap.loadFromData(self.current_cover_data)
-            QApplication.clipboard().setPixmap(pixmap)
+            if not pixmap.loadFromData(self.current_cover_data):
+                return
+            mime_data = QMimeData()
+            mime_data.setData(
+                COVER_CLIPBOARD_MIME_TYPE,
+                QByteArray(self.current_cover_data),
+            )
+            mime_data.setImageData(pixmap.toImage())
+            QApplication.clipboard().setMimeData(mime_data)
 
     def paste_cover_from_clipboard(self):
         mime_data = QApplication.clipboard().mimeData()
-        if mime_data.hasImage():
+        cover_data = None
+        if mime_data.hasFormat(COVER_CLIPBOARD_MIME_TYPE):
+            original_cover_data = bytes(
+                mime_data.data(COVER_CLIPBOARD_MIME_TYPE)
+            )
+            if (
+                original_cover_data
+                and not QImage.fromData(original_cover_data).isNull()
+            ):
+                cover_data = original_cover_data
+
+        if cover_data is None and mime_data.hasImage():
             image = QApplication.clipboard().image()
             ba = QByteArray()
             buffer = QBuffer(ba)
@@ -1530,8 +1551,9 @@ class MusicEditorWindow(QMainWindow):
                 image.save(buffer, "PNG")
             else:
                 image.save(buffer, "JPEG", quality=100) 
-                
             cover_data = ba.data()
+
+        if cover_data is not None:
             def apply_pasted_cover():
                 self.current_cover_data = cover_data
                 self._cover_is_mixed = False
@@ -1624,7 +1646,6 @@ class MusicEditorWindow(QMainWindow):
             and self._editor_baseline is not None
         )
         before = self._editor_baseline if should_record else None
-        session_before = self._capture_lock_session_patch(key) if should_record else None
         btn = self.lock_btns[key]
         if is_locked:
             btn.setText("🔒")
@@ -1638,36 +1659,67 @@ class MusicEditorWindow(QMainWindow):
             if key in self.mb_apply_btns:
                 self.mb_apply_btns[key].setEnabled(True)
                 self.mb_apply_btns[key].setStyleSheet("padding: 4px; font-weight: bold; background-color: #3498db; color: white; border-radius: 4px; font-size: 10pt;")
+        btn.repaint()
 
         items = [item for item in self.file_list.selectedItems() if item.data(Qt.ItemDataRole.UserRole + 2) == "track"]
         if not items:
             self._refresh_filename_clue_action()
             return
-        for item in items:
-            path = os.path.join(self.music_dir, self.get_real_filename(item))
-            self.album_session.set_lock(path, key, is_locked)
-            
+        selected_paths = tuple(
+            os.path.join(self.music_dir, self.get_real_filename(item))
+            for item in items
+        )
+        sync_paths = ()
+        sync_val = None
+
         if is_locked and key in self.album_session.album_sync_keys and len(items) == 1:
-            ref_path = os.path.join(self.music_dir, self.get_real_filename(items[0]))
+            ref_path = selected_paths[0]
             ref_group = self.album_session.virtual_album_map.get(ref_path)
-            sync_val = self.inputs[key].currentText()
-            
+            matching_paths = []
+
             for i in range(self.file_list.count()):
                 o_item = self.file_list.item(i)
-                if o_item.data(Qt.ItemDataRole.UserRole + 2) != "track": continue
+                if o_item.data(Qt.ItemDataRole.UserRole + 2) != "track":
+                    continue
                 o_path = os.path.join(self.music_dir, self.get_real_filename(o_item))
-                
+
                 is_same = False
                 if ref_group and self.album_session.virtual_album_map.get(o_path) == ref_group:
                     is_same = True
-                elif not ref_group and o_path not in self.album_session.virtual_album_map and self._is_same_physical_album(ref_path, o_path):
+                elif (
+                    not ref_group
+                    and o_path not in self.album_session.virtual_album_map
+                    and self._is_same_physical_album(ref_path, o_path)
+                ):
                     is_same = True
-                    
+
                 if is_same:
-                    self.album_session.set_lock(o_path, key, True)
-                    if sync_val not in ["<保留>", "<留白>"]:
-                        self.album_session.all_files_data[o_path][key] = sync_val
-                        self._invalidate_metadata_caches([o_path])
+                    matching_paths.append(o_path)
+
+            sync_paths = tuple(matching_paths)
+            sync_val = self.inputs[key].currentText()
+
+        affected_paths = tuple(dict.fromkeys((*selected_paths, *sync_paths)))
+        session_before = (
+            self._capture_lock_session_patch(key, affected_paths)
+            if should_record
+            else None
+        )
+
+        for path in selected_paths:
+            self.album_session.set_lock(path, key, is_locked)
+
+        metadata_changed_paths = []
+        for path in sync_paths:
+            self.album_session.set_lock(path, key, True)
+            if (
+                sync_val not in ["<保留>", "<留白>"]
+                and self.album_session.all_files_data[path].get(key) != sync_val
+            ):
+                self.album_session.all_files_data[path][key] = sync_val
+                metadata_changed_paths.append(path)
+        if key == "album" and metadata_changed_paths:
+            self._invalidate_metadata_caches(metadata_changed_paths)
 
         if should_record:
             after = self._capture_editor_state()
@@ -1677,7 +1729,7 @@ class MusicEditorWindow(QMainWindow):
                 after=after,
                 affected_paths=before.selected_paths,
                 session_before=session_before,
-                session_after=self._capture_lock_session_patch(key),
+                session_after=self._capture_lock_session_patch(key, affected_paths),
             ))
             self._editor_baseline = after
         self._refresh_filename_clue_action()
@@ -2024,12 +2076,18 @@ class MusicEditorWindow(QMainWindow):
     def _stored_value(mapping, key):
         return StoredValue(key in mapping, copy.deepcopy(mapping.get(key)))
 
-    def _capture_lock_session_patch(self, key):
-        paths = set(self.album_session.all_files_data) | set(self.album_session.locks_data)
+    def _capture_lock_session_patch(self, key, paths):
+        paths = tuple(dict.fromkeys(paths))
         return SessionPatch(
             metadata_values={
-                path: {key: self._stored_value(data, key)}
-                for path, data in self.album_session.all_files_data.items()
+                path: {
+                    key: self._stored_value(
+                        self.album_session.all_files_data[path],
+                        key,
+                    )
+                }
+                for path in paths
+                if path in self.album_session.all_files_data
             },
             lock_values={
                 path: {key: self._stored_value(self.album_session.locks_data.get(path, {}), key)}
@@ -2917,14 +2975,25 @@ class MusicEditorWindow(QMainWindow):
         return ("album", album, cover_fingerprint) if album else ("file", path)
 
     def _is_same_physical_album(self, reference_path, candidate_path, reference_data=None):
-        reference_data = reference_data or self.album_session.all_files_data.get(reference_path, {})
+        stored_reference_data = self.album_session.all_files_data.get(
+            reference_path,
+            {},
+        )
+        if reference_data is None:
+            reference_data = stored_reference_data
         candidate_data = self.album_session.all_files_data.get(candidate_path, {})
         reference_album = str(reference_data.get("album", "")).strip()
+        candidate_album = str(candidate_data.get("album", "")).strip()
+        if not reference_album or reference_album != candidate_album:
+            return False
+        reference_fingerprint = (
+            self._physical_album_key(reference_path, reference_data)[1]
+            if reference_data is not stored_reference_data
+            else self._physical_album_key(reference_path)[1]
+        )
         return (
-            bool(reference_album)
-            and reference_album == str(candidate_data.get("album", "")).strip()
-            and self._cover_fingerprint(reference_data.get("cover_data"))
-            == self._cover_fingerprint(candidate_data.get("cover_data"))
+            reference_fingerprint
+            == self._physical_album_key(candidate_path)[1]
         )
 
     def _apply_album_source_preference(self, path, api_data, establish_default=False):

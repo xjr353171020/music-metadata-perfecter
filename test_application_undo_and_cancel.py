@@ -5,7 +5,15 @@ from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QAbstractAnimation, QEvent, QPoint, Qt
+from PyQt6.QtCore import (
+    QAbstractAnimation,
+    QByteArray,
+    QBuffer,
+    QEvent,
+    QIODevice,
+    QPoint,
+    Qt,
+)
 from PyQt6.QtGui import QImage, QKeyEvent
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
@@ -188,6 +196,130 @@ class ApplicationUndoTests(unittest.TestCase):
         self.assertFalse(self.window.album_session.is_locked(self.paths[0], "title"))
         self.assertFalse(lock.isChecked())
 
+    def test_single_field_lock_undo_patch_only_captures_selected_paths(self):
+        lock = self.window.lock_btns["title"]
+        QTest.mouseClick(lock, Qt.MouseButton.LeftButton)
+
+        command = self.window.undo_manager.peek()
+        self.assertIsInstance(command, EditorUndoCommand)
+        self.assertEqual(
+            set(command.session_before.metadata_values),
+            {self.paths[0]},
+        )
+        self.assertEqual(
+            set(command.session_before.lock_values),
+            {self.paths[0]},
+        )
+        self.assertEqual(
+            set(command.session_after.metadata_values),
+            {self.paths[0]},
+        )
+        self.assertEqual(
+            set(command.session_after.lock_values),
+            {self.paths[0]},
+        )
+
+    def test_album_lock_reuses_cached_physical_album_keys(self):
+        cover = b"same-cover" * 4096
+        for path in self.paths:
+            self.window.album_session.all_files_data[path]["cover_data"] = cover
+        self.window._invalidate_metadata_caches(self.paths)
+        self.window.populate_file_list(self.window.full_sortable_list)
+        self.window.on_file_selected()
+
+        with patch.object(
+            self.window,
+            "_cover_fingerprint",
+            wraps=self.window._cover_fingerprint,
+        ) as cover_fingerprint:
+            QTest.mouseClick(
+                self.window.lock_btns["album"],
+                Qt.MouseButton.LeftButton,
+            )
+
+        self.assertEqual(cover_fingerprint.call_count, 0)
+
+    def test_album_lock_propagation_and_undo_use_only_album_members(self):
+        cover = b"album-cover" * 4096
+        for path in self.paths:
+            self.window.album_session.all_files_data[path]["cover_data"] = cover
+        other_path = os.path.join(os.getcwd(), "undo-other-album.mp3")
+        self.window.album_session.all_files_data[other_path] = {
+            "title": "Other",
+            "artist": "Artist",
+            "album": "Other Album",
+            "album_artist": "Artist",
+            "composer": "",
+            "track": "1",
+            "disc": "1",
+            "date": "2026",
+            "genre": "",
+            "comment": "",
+            "cover_data": cover,
+        }
+        self.window.full_sortable_list.append(
+            (("Other Album", 1, 1, os.path.basename(other_path)), other_path)
+        )
+        self.window._invalidate_metadata_caches((*self.paths, other_path))
+        self.window.populate_file_list(self.window.full_sortable_list)
+        first = self.window._track_item_cache[self.paths[0]]
+        self.window.file_list.clearSelection()
+        first.setSelected(True)
+        self.window.file_list.setCurrentItem(first)
+        self.window.on_file_selected()
+        self.window.inputs["album"].setEditText("Changed Album")
+        self.window.undo_manager.clear()
+        self.window._editor_baseline = self.window._capture_editor_state()
+
+        QTest.mouseClick(
+            self.window.lock_btns["album"],
+            Qt.MouseButton.LeftButton,
+        )
+
+        command = self.window.undo_manager.peek()
+        self.assertIsInstance(command, EditorUndoCommand)
+        self.assertEqual(
+            set(command.session_before.metadata_values),
+            set(self.paths),
+        )
+        self.assertTrue(all(
+            self.window.album_session.is_locked(path, "album")
+            for path in self.paths
+        ))
+        self.assertFalse(
+            self.window.album_session.is_locked(other_path, "album")
+        )
+        self.assertTrue(all(
+            self.window.album_session.all_files_data[path]["album"]
+            == "Changed Album"
+            for path in self.paths
+        ))
+        self.assertEqual(
+            self.window.album_session.all_files_data[other_path]["album"],
+            "Other Album",
+        )
+
+        self.window.perform_undo()
+        self.assertTrue(all(
+            self.window.album_session.all_files_data[path]["album"] == "Album"
+            for path in self.paths
+        ))
+        self.assertTrue(all(
+            not self.window.album_session.is_locked(path, "album")
+            for path in self.paths
+        ))
+
+        self.window.perform_redo()
+        self.assertTrue(all(
+            self.window.album_session.all_files_data[path]["album"]
+            == "Changed Album"
+            for path in self.paths
+        ))
+        self.assertTrue(all(
+            self.window.album_session.is_locked(path, "album")
+            for path in self.paths
+        ))
+
     def test_pasted_cover_undo_restores_no_cover_and_modified_flag(self):
         image = QImage(8, 6, QImage.Format.Format_RGB32)
         image.fill(Qt.GlobalColor.red)
@@ -200,6 +332,26 @@ class ApplicationUndoTests(unittest.TestCase):
         self.window.perform_undo()
         self.assertIsNone(self.window.current_cover_data)
         self.assertFalse(self.window.cover_modified_in_batch)
+
+    def test_copy_then_paste_preserves_original_cover_bytes(self):
+        image = QImage(96, 96, QImage.Format.Format_RGB32)
+        image.fill(Qt.GlobalColor.darkCyan)
+        original_buffer = QByteArray()
+        buffer = QBuffer(original_buffer)
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        self.assertTrue(image.save(buffer, "JPEG", 72))
+        original_cover = bytes(original_buffer)
+
+        self.window.current_cover_data = original_cover
+        self.window.copy_cover_to_clipboard()
+        self.assertTrue(QApplication.clipboard().mimeData().hasImage())
+
+        self.window.current_cover_data = None
+        self.window.cover_modified_in_batch = False
+        self.window.paste_cover_from_clipboard()
+
+        self.assertEqual(self.window.current_cover_data, original_cover)
+        self.assertTrue(self.window.cover_modified_in_batch)
 
     def test_gallery_cover_selection_is_one_undoable_action(self):
         class Gallery:

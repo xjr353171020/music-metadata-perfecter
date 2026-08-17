@@ -340,7 +340,7 @@ Two different mechanisms share one LIFO `UndoManager`:
 
 ### Unsaved editor undo
 
-`EditorStateSnapshot` contains selected paths, current field text, checkbox/lock state, cursor selections, cover/mixed/modified state, result-panel values, selected source, status/score text, and the optional filename-clue provenance record. `SessionPatch` optionally stores previous metadata/locks or source-preference/API-cache entries. Continuous typing in the same field/path can merge within 0.55 seconds. Applying undo suspends recording so restoration does not create a new command.
+`EditorStateSnapshot` contains selected paths, current field text, checkbox/lock state, cursor selections, cover/mixed/modified state, result-panel values, selected source, status/score text, and the optional filename-clue provenance record. `SessionPatch` optionally stores previous metadata/locks or source-preference/API-cache entries. Lock commands scope their session patch to selected tracks plus any same-album tracks actually affected by lock propagation, and physical-album matching reuses the existing cover-identity caches. Continuous typing in the same field/path can merge within 0.55 seconds. Applying undo suspends recording so restoration does not create a new command.
 
 The undo and redo stacks share limits of 40 commands and 128 MiB. Cover byte payloads are SHA-256 interned to reduce duplicate memory. Undo moves a command to redo, redo moves it back to undo, and a new command clears redo. Virtual-album grouping, skip markers, settings, and local file workflows are not represented as editor undo commands.
 
@@ -398,7 +398,7 @@ When metadata already matched an Apple collection, its artwork URL is preferred 
 
 Cover Art Archive uses the MusicBrainz release ID and downloads the first image marked `front`. The common request helper retries up to four times for 429/500/502/503/504 and request exceptions, with incremental cancelable waits and 10/15 s request timeouts.
 
-The worker does not transform or explicitly validate downloaded image bytes. The gallery's `QImage.fromData()` supplies display dimensions and implicit decode feedback, but invalid bytes are not rejected by a dedicated validation layer. Clipboard images are re-encoded as PNG when alpha is present, otherwise high-quality JPEG. Saved bytes remain separate from Provider text metadata.
+The worker does not transform or explicitly validate downloaded image bytes. The gallery's `QImage.fromData()` supplies display dimensions and implicit decode feedback, but invalid bytes are not rejected by a dedicated validation layer. `复制封面` publishes both a standard clipboard image and an application-specific MIME payload containing the exact embedded bytes; an in-application paste prefers that validated raw payload, so JPEG/PNG encoding and byte size are preserved. Clipboard images from other applications still fall back to PNG when alpha is present, otherwise high-quality JPEG. Saved bytes remain separate from Provider text metadata.
 
 Selection cover states are:
 
